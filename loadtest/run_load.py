@@ -94,7 +94,7 @@ def simulate(i, args, stats):
     exam = next((e for e in exams if e["state"] in ("open", "in_progress") and (not args.exam_id or e["id"] == args.exam_id)), None)
     if not exam:
         return False
-    code, state = call(stats, "start exam", "POST", f"{base}/api/student/exams/{exam['id']}/start/", token, {"agree_rules": True})
+    code, state = call(stats, "start exam", "POST", f"{base}/api/student/exams/{exam['id']}/start/", token, {"agree_rules": True, "accept_legal": True, "location": {"lat": -6.8 + random.random() / 50, "lng": 39.2 + random.random() / 50, "accuracy": 10}})
     if code not in (200, 201) or not state:
         return False
     aid = state["attempt_id"]

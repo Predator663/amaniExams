@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import ExamBuilder from "./ExamBuilder";
 import { ErrorNote, Loading, useLoad } from "./ui";
 import { api, downloadFile } from "@/lib/api";
 import { eatDate } from "@/lib/clock";
@@ -9,55 +10,6 @@ import { useSession } from "@/lib/session";
 type F = { title: string; subject: string; term: string; classes: number[]; start: string; end: string; duration: number; pass: number; rules: string;
   shuffleQ: boolean; shuffleO: boolean; skip: boolean; late: string; warnings: string; partial: boolean; neg: boolean; negFrac: number };
 const blank: F = { title: "", subject: "", term: "", classes: [], start: "", end: "", duration: 60, pass: 30, rules: "", shuffleQ: true, shuffleO: true, skip: false, late: "", warnings: "", partial: true, neg: false, negFrac: 0.25 };
-
-function Paper({ exam, reload, editable }: { exam: any; reload: () => void; editable: boolean }) {
-  const paper = useLoad(() => api<any[]>(`/exams/${exam.id}/questions/`), [exam.id, exam.question_count]);
-  const pool = useLoad(() => api<any[]>(`/questions/?subject=${exam.subject}&status=approved`), [exam.subject]);
-  const [picked, setPicked] = useState<number[]>([]), [rules, setRules] = useState<{ topic: string; difficulty: string; count: number }[]>([]);
-  const [fl, setFl] = useState({ topic: "", difficulty: "" }), [errs, setErrs] = useState<string[]>([]), [msg, setMsg] = useState("");
-  useEffect(() => { if (paper.data) setPicked(paper.data.map((q: any) => q.source).filter(Boolean)); }, [paper.data]);
-  const shown = (pool.data || []).filter((q) => (!fl.topic || q.topic.toLowerCase().includes(fl.topic.toLowerCase())) && (!fl.difficulty || q.difficulty === fl.difficulty));
-  const topics = Array.from(new Set((pool.data || []).map((q) => q.topic).filter(Boolean)));
-  async function build() {
-    setErrs([]); setMsg("");
-    try { const r = await api<any>(`/exams/${exam.id}/paper/`, { body: { question_ids: picked, rules: rules.filter((x) => x.count > 0).map((x) => ({ ...x, topic: x.topic || undefined, difficulty: x.difficulty || undefined })) } });
-      setMsg(`Paper built: ${r.questions} questions, ${r.total_marks} marks.`); setRules([]); paper.reload(); reload(); } catch (e: any) { setErrs(errorLines(e.data, e.message)); }
-  }
-  return (
-    <div className="card">
-      <h2>Question paper</h2>
-      {paper.loading ? <Loading /> : <p><b>{paper.data?.length || 0}</b> question(s) in the paper · <b>{exam.total_marks}</b> marks</p>}
-      {!editable ? <p className="hint">This exam can no longer be edited.</p> : (
-        <>
-          <h3>Pick questions</h3>
-          <div className="grid2">
-            <label className="field"><span>Topic</span><input className="input" list="topics" value={fl.topic} onChange={(e) => setFl({ ...fl, topic: e.target.value })} /><datalist id="topics">{topics.map((t) => <option key={t} value={t} />)}</datalist></label>
-            <label className="field"><span>Difficulty</span><select className="input" value={fl.difficulty} onChange={(e) => setFl({ ...fl, difficulty: e.target.value })}><option value="">All</option><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select></label>
-          </div>
-          {pool.loading ? <Loading /> : !shown.length ? <p className="muted">No approved questions match. Questions must be approved before they can be used.</p> : (
-            <div style={{ maxHeight: 320, overflow: "auto" }}>
-              {shown.map((q) => <label key={q.id} className="switch" style={{ alignItems: "flex-start" }}><input type="checkbox" checked={picked.includes(q.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, q.id] : picked.filter((x) => x !== q.id))} /><span>{plain(q.prompt).slice(0, 110)} <span className="muted small">({q.topic || "—"}, {q.difficulty}, {q.marks} mark)</span></span></label>)}
-            </div>
-          )}
-          <div className="row"><button className="btn" onClick={() => setPicked(Array.from(new Set([...picked, ...shown.map((q) => q.id)])))}>Select all shown</button><button className="btn" onClick={() => setPicked([])}>Clear</button><span className="pill">{picked.length} picked</span></div>
-          <h3>Or add random rules</h3>
-          <p className="muted small">For example: 10 easy, 20 medium, 10 hard from chosen topics. Random questions are added to the ones you picked.</p>
-          {rules.map((r, i) => (
-            <div key={i} className="row" style={{ marginBottom: ".4rem" }}>
-              <input className="input grow" placeholder="Topic (any)" value={r.topic} onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, topic: e.target.value } : x)))} />
-              <select className="input" style={{ width: 120 }} aria-label="Difficulty" value={r.difficulty} onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, difficulty: e.target.value } : x)))}><option value="">Any</option><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select>
-              <input className="input" style={{ width: 80 }} type="number" min={1} aria-label="How many" value={r.count} onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, count: Number(e.target.value) } : x)))} />
-              <button className="btn danger icon" aria-label="Remove rule" onClick={() => setRules(rules.filter((_, j) => j !== i))}>✕</button>
-            </div>))}
-          <button className="btn" onClick={() => setRules([...rules, { topic: "", difficulty: "", count: 5 }])}>+ Add rule</button>
-          {errs.length > 0 && <div className="card error" role="alert">{errs.map((e, i) => <p key={i}>⚠ {e}</p>)}</div>}
-          {msg && <p className="ok" role="status">✓ {msg}</p>}
-          <p><button className="btn primary big" disabled={!picked.length && !rules.length} onClick={build}>{paper.data?.length ? "Rebuild paper" : "Build paper"}</button></p>
-        </>
-      )}
-    </div>
-  );
-}
 
 function Admin({ exam, reload }: { exam: any; reload: () => void }) {
   const paper = useLoad(() => api<any[]>(`/exams/${exam.id}/questions/`), [exam.id]);
@@ -132,7 +84,7 @@ export default function ExamForm({ id, onClose }: { id: number | null; onClose: 
   const num = (k: keyof F, label: string, props: any = {}) => <label className="field"><span>{label}</span><input className="input" type="number" value={f[k] as any} onChange={(ev) => up({ [k]: Number(ev.target.value) } as any)} disabled={!editable} {...props} /></label>;
   const chk = (k: keyof F, label: string) => <label className="switch"><input type="checkbox" checked={f[k] as boolean} disabled={!editable} onChange={(ev) => up({ [k]: ev.target.checked } as any)} /> {label}</label>;
   return (
-    <div>
+    <div className="examform">
       <div className="row"><button className="btn" onClick={onClose}>← Back to list</button><span className="pill">{cid ? `#${cid}` : "New"} · {status}</span></div>
       {!editable && <p className="hint">A live or finished exam cannot be edited.</p>}
       <div className="card">
@@ -161,7 +113,8 @@ export default function ExamForm({ id, onClose }: { id: number | null; onClose: 
         <div className="row"><button className="btn primary" disabled={busy || !editable || !f.title || !f.subject} onClick={save}>{cid ? "Save changes" : "Create exam"}</button>{cid && status === "draft" && <button className="btn danger" onClick={del}>Delete draft</button>}</div>
         {e?.start_at && <p className="muted small">Window: {eatDate(e.start_at, undefined, lang)} to {eatDate(e.end_at, undefined, lang)}</p>}
       </div>
-      {cid && e && <Paper exam={e} reload={exam.reload} editable={editable} />}
+      {!cid && <div className="hint">Save the exam details first. Then you can pick questions from the question bank, create new ones, and preview the paper.</div>}
+      {cid && e && <ExamBuilder key={e.id} exam={e} reload={exam.reload} editable={editable} admin={admin} subjectName={subjects.data?.find((x) => x.id === e.subject)?.name || ""} />}
       {cid && e && admin && <Admin exam={e} reload={exam.reload} />}
     </div>
   );

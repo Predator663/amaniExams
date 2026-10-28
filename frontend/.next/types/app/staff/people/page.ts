@@ -1,4 +1,4 @@
-// File: C:\Users\DarkSeid\Desktop\amani_exams\amani_exams\frontend\app\staff\people\page.tsx
+// File: C:\Users\DarkSeid\Desktop\Work\amani_exams\frontend\app\staff\people\page.tsx
 import * as entry from '../../../../../app/staff/people/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

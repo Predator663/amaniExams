@@ -103,8 +103,8 @@ export default function Shell({ children, bare, title }: { children: ReactNode; 
 
   const student: Group[] = [
     { items: [
-      { href: "/", icon: "home", label: t("nav_home") }, { href: "/practice/", icon: "pencil", label: t("nav_practice") },
-      { href: "/results/", icon: "chart", label: t("nav_results") }, { href: "/badges/", icon: "medal", label: t("nav_badges") },
+      { href: "/", icon: "home", label: t("nav_home") }, { href: "/results/", icon: "chart", label: t("nav_results") },
+      { href: "/practice/", icon: "pencil", label: t("nav_practice") }, { href: "/badges/", icon: "medal", label: t("nav_badges") },
       { href: "/leaderboard/", icon: "trophy", label: t("leaderboard") }, { href: "/progress/", icon: "trend", label: t("my_analytics") } ] },
     { title: t("nav_more"), items: [
       { href: "/notifications/", icon: "bell", label: t("notifications") }, { href: "/settings/", icon: "sliders", label: t("nav_settings") },

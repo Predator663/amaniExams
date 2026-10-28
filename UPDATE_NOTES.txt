@@ -1,0 +1,31 @@
+Amani Exams update: live monitor + student "waiting for results"
+
+Copy these files over your project (same paths):
+  exams/views.py  exams/urls.py  exams/tests.py
+  frontend/components/LiveBoard.tsx   frontend/components/ResultsWaiting.tsx (new)
+  frontend/components/Shell.tsx       frontend/lib/i18n.ts
+  frontend/app/exam/page.tsx          frontend/app/results/page.tsx
+  frontend/app/staff/monitor/page.tsx frontend/app/globals.css
+
+No new migrations. Then:  python manage.py test   (160 tests pass here)
+Rebuild the front end (npm run build) if you serve the static export.
+
+==== Update: anti-cheat proximity detection (Live monitor -> Anti-cheat tab) ====
+New Django app `proctoring` (add "proctoring" to INSTALLED_APPS, already done in config/settings.py) + one migration:
+  python manage.py migrate
+  python manage.py test proctoring exams
+  python -m unittest proctoring.test_geo        (pure-logic tests, no database)
+Daily (cron): python manage.py purge_locations   (removes stored positions of finished exams)
+Settings (env): PROCTORING_ENABLED=1, PROXIMITY_ALERT_METERS=20, LOCATION_STALE_SECONDS=45, PROXIMITY_CLEAR_SECONDS=60, LOCATION_MAX_ACCURACY=100
+Changed / new files:
+  proctoring/ (new)  config/settings.py  config/urls.py  exams/views.py  loadtest/run_load.py
+  frontend/lib/proctor.ts (new)  frontend/lib/i18n.ts  frontend/lib/site.ts
+  frontend/components/AntiCheat.tsx (new)  frontend/components/LiveBoard.tsx  frontend/components/Icon.tsx
+  frontend/app/exam/page.tsx  frontend/app/privacy/page.tsx  frontend/app/terms/page.tsx  frontend/app/globals.css
+  docs/admin_guide.md  docs/student_guide_en.md  docs/student_guide_sw.md
+The student start endpoint now REQUIRES accept_legal=true and a location fix (400 "legal" / "location_required" otherwise).
+Rebuild the front end (npm run build); frontend/out is the old build.
+
+==== Update 2: place names ====
+New: proctoring/geocode.py, GET /api/proctoring/place/, settings GEOCODER_URL / GEOCODER_USER_AGENT (GEOCODER_URL="" switches off). Privacy policy updated (LEGAL_VERSION 2026-10-28).
+Set GEOCODER_USER_AGENT or VAPID_CONTACT_EMAIL to a real contact (OpenStreetMap usage policy). Files: proctoring/{geocode,views,urls,tests,test_geo}.py config/settings.py frontend/components/AntiCheat.tsx frontend/app/privacy/page.tsx frontend/app/globals.css frontend/lib/site.ts docs/admin_guide.md

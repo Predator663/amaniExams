@@ -26,6 +26,11 @@ Installing makes the app open faster and lets us send you reminders.
 - At the start time the **START** button turns on. Read the rules and tick **I have read and agree to the rules**.
 - You may start up to the **late-entry time** (usually 10 minutes) after the start. If you start late, you do **not** get extra time.
 
+### Phone settings and location (every exam)
+- Before you can press START you must: turn on **Location (GPS)**, **Wi-Fi** and **Bluetooth**, allow Location for the app, tap **Check my phone**, tick the confirmation, and tick that you accept the **Terms of use** and **Privacy policy**.
+- Keep Location, Wi-Fi and Bluetooth on until you submit. Your position is used only to check that students sit at least 20 metres apart. If Location is switched off, your questions are hidden until you turn it on again, and the timer keeps running.
+- Sit apart from other students writing the same exam.
+
 ## 5. During the exam
 - One question at a time. The top of the screen shows **Question 7 of 40** and the **countdown timer**.
 - Choose or write your answer, then press **Submit**. The next question appears.

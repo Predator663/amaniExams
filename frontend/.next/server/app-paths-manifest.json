@@ -1,11 +1,8 @@
 {
-  "/page": "app/page.js",
-  "/result/page": "app/result/page.js",
-  "/review/page": "app/review/page.js",
-  "/login/page": "app/login/page.js",
-  "/staff/page": "app/staff/page.js",
-  "/staff/exams/page": "app/staff/exams/page.js",
   "/staff/monitor/page": "app/staff/monitor/page.js",
-  "/staff/analytics/page": "app/staff/analytics/page.js",
-  "/staff/questions/page": "app/staff/questions/page.js"
+  "/staff/people/page": "app/staff/people/page.js",
+  "/staff/questions/page": "app/staff/questions/page.js",
+  "/staff/page": "app/staff/page.js",
+  "/login/page": "app/login/page.js",
+  "/page": "app/page.js"
 }

@@ -281,3 +281,121 @@ class MonitorDetailTests(Base):
         self.assertGreater(row["seconds_left"], 0)
         self.assertIn("online", row)
         self.assertEqual(d["submitted_students"], [])
+        self.assertEqual(d["not_started_students"][0]["index"], "S2")
+
+    def test_submitted_students_are_listed_and_board_keeps_finished_exam(self):
+        a = services.start_attempt(self.exam, self.amina, now=self.at(1))
+        services.finalize_attempt(a.pk, self.at(5))
+        d = self.client_for(self.admin).get(f"/api/exams/{self.exam.pk}/monitor/").json()
+        self.assertEqual((d["in_progress"], d["submitted"]), (0, 1))
+        self.assertEqual(d["submitted_students"][0]["index"], "S1")
+        self.assertEqual(d["submitted_students"][0]["answered"], 0)
+
+    def test_monitor_survives_exam_without_times(self):
+        Exam.objects.filter(pk=self.exam.pk).update(start_at=None, end_at=None, status=Exam.DRAFT)
+        r = self.client_for(self.admin).get(f"/api/exams/{self.exam.pk}/monitor/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.json()["start_at"])
+
+    def test_partial_vs_full_completion(self):
+        a = services.start_attempt(self.exam, self.amina, now=self.at(1))
+        services.finalize_attempt(a.pk, self.at(5))
+        d = self.client_for(self.admin).get(f"/api/exams/{self.exam.pk}/monitor/").json()
+        self.assertEqual(d["submitted_students"][0]["completion"], "partial")
+        self.assertEqual((d["full"], d["partial"]), (0, 1))
+
+    def test_parents_shown_from_guardians_page(self):
+        from guardians.models import Guardian, GuardianLink
+        g = Guardian(relationship="mother"); g.set_name("Mama Amina"); g.set_phone("0712345678"); g.save()
+        GuardianLink.objects.create(guardian=g, student=self.zawadi)
+        services.start_attempt(self.exam, self.amina, now=self.at(1))
+        d = self.client_for(self.admin).get(f"/api/exams/{self.exam.pk}/monitor/").json()
+        self.assertEqual(d["not_started_students"][0]["parents"][0]["name"], "Mama Amina")
+
+    def test_pending_results_listed_for_student(self):
+        a = services.start_attempt(self.exam, self.amina, now=self.at(1))
+        services.finalize_attempt(a.pk, self.at(5))
+        r = self.client_for(self.amina).get("/api/results/pending/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.json()), 1)
+        self.assertIn("results_at", r.json()[0])
+
+    def test_board_is_one_call_and_teacher_gets_no_names(self):
+        services.start_attempt(self.exam, self.amina, now=self.at(1))
+        b = self.client_for(self.admin).get("/api/exams/monitor-board/").json()
+        self.assertIn("exams", b)
+        self.assertIn("totals", b)
+
+
+class BuilderTests(Base):
+    """Question auto-approval and the exam builder's picker, random pick and sectioned paper."""
+
+    def setUp(self):
+        super().setUp()
+        from academics.models import TeacherAssignment
+        self.teacher = User.objects.create(username="teach1", role="teacher", password=make_password("T3ach-pass!"))
+        TeacherAssignment.objects.create(teacher=self.teacher, subject=self.subject, school_class=self.cls)
+        self.exam.status = Exam.DRAFT
+        self.exam.save()
+        self.exam.questions.all().delete()
+        self.t = self.client_for(self.teacher)
+
+    def body(self, qtype="mcq_single", topic="Algebra", prompt="2+2?", **extra):
+        base = {"subject": self.subject.pk, "form_level": 1, "topic": topic, "difficulty": "easy", "marks": 1,
+                "language": "en", "qtype": qtype, "prompt": f"<p>{prompt}</p>"}
+        if qtype == "mcq_single":
+            base.update(content={"options": [{"id": "a", "text": "3"}, {"id": "b", "text": "4"}]}, answer={"correct": "b"})
+        else:
+            base.update(content={}, answer={"correct": True})
+        base.update(extra)
+        return base
+
+    def test_submit_approves_immediately(self):
+        r = self.t.post("/api/questions/", self.body(), format="json")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.data["status"], "draft")
+        s = self.t.post(f"/api/questions/{r.data['id']}/submit/", {}, format="json")
+        self.assertEqual(s.data["status"], "approved")
+
+    def test_create_with_submit_flag_is_approved(self):
+        r = self.t.post("/api/questions/", self.body(submit=True), format="json")
+        self.assertEqual(r.data["status"], "approved")
+
+    def test_editing_an_approved_question_keeps_it_approved(self):
+        r = self.t.post("/api/questions/", self.body(submit=True), format="json")
+        e = self.t.patch(f"/api/questions/{r.data['id']}/", {"topic": "Geometry"}, format="json")
+        self.assertEqual(e.data["status"], "approved")
+
+    def test_bank_pages_filters_and_usage(self):
+        ids = [self.t.post("/api/questions/", self.body(topic="Algebra" if i % 2 else "Geometry", prompt=f"Q{i}", submit=True), format="json").data["id"] for i in range(7)]
+        self.t.post("/api/questions/", self.body(prompt="draft one"), format="json")  # draft: never listed
+        r = self.t.get(f"/api/exams/{self.exam.pk}/bank/?page_size=3").data
+        self.assertEqual((r["count"], r["pages"], len(r["results"])), (7, 3, 3))
+        self.assertEqual(sorted(r["topics"]), ["Algebra", "Geometry"])
+        self.assertEqual(self.t.get(f"/api/exams/{self.exam.pk}/bank/?page_size=3&page=3").data["results"].__len__(), 1)
+        self.assertEqual(self.t.get(f"/api/exams/{self.exam.pk}/bank/?topic=Algebra").data["count"], 3)
+        self.assertEqual(self.t.get(f"/api/exams/{self.exam.pk}/bank/?q=Q3").data["count"], 1)
+        # use two questions in another exam -> they count as "used"
+        other = Exam.objects.create(title="Older", subject=self.subject, status=Exam.DRAFT)
+        for pos, qid in enumerate(ids[:2], start=1):
+            ExamQuestion.objects.create(exam=other, position=pos, source_id=qid, payload=mcq())
+        self.assertEqual(self.t.get(f"/api/exams/{self.exam.pk}/bank/?usage=used").data["count"], 2)
+        self.assertEqual(self.t.get(f"/api/exams/{self.exam.pk}/bank/?usage=unused").data["count"], 5)
+
+    def test_pick_returns_random_unselected_questions(self):
+        ids = [self.t.post("/api/questions/", self.body(prompt=f"Q{i}", submit=True), format="json").data["id"] for i in range(4)]
+        r = self.t.post(f"/api/exams/{self.exam.pk}/pick/", {"rules": [{"difficulty": "easy", "count": 2}], "exclude": ids[:2]}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual({q["id"] for q in r.data}, set(ids[2:]))
+        bad = self.t.post(f"/api/exams/{self.exam.pk}/pick/", {"rules": [{"count": 9}], "exclude": []}, format="json")
+        self.assertEqual(bad.status_code, 400)
+
+    def test_paper_is_grouped_into_sections_in_picked_order(self):
+        tf1 = self.t.post("/api/questions/", self.body("true_false", prompt="TF1", submit=True), format="json").data["id"]
+        m2 = self.t.post("/api/questions/", self.body(prompt="M2", submit=True), format="json").data["id"]
+        m1 = self.t.post("/api/questions/", self.body(prompt="M1", submit=True), format="json").data["id"]
+        r = self.t.post(f"/api/exams/{self.exam.pk}/paper/", {"question_ids": [tf1, m2, m1]}, format="json")
+        self.assertEqual(r.status_code, 200, r.data)
+        rows = self.t.get(f"/api/exams/{self.exam.pk}/questions/").data
+        self.assertEqual([x["source"] for x in rows], [m2, m1, tf1])  # multiple choice first (A), true/false second (B)
+        self.assertEqual([x["section"] for x in rows], ["A", "A", "B"])

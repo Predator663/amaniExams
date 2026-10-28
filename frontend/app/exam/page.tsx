@@ -3,11 +3,13 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Listen from "@/components/Listen";
 import QuestionView, { hasAnswer, initialValue } from "@/components/QuestionView";
+import ResultsWaiting from "@/components/ResultsWaiting";
 import Shell from "@/components/Shell";
 import { Bar, ErrorNote, Loading, Modal, useLoad, useNow } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { clock, eatDate, makeOffset } from "@/lib/clock";
 import { clearAttempt, dequeue, enqueue, readDraft, readQueue, saveDraft } from "@/lib/offlineQueue";
+import { getFix, readSensors, startMotion, useProctor, type Fix, type FixError, type Sensors } from "@/lib/proctor";
 import { useSession } from "@/lib/session";
 import type { AttemptState, ExamCard } from "@/lib/types";
 
@@ -16,6 +18,8 @@ function PreExam({ examId }: { examId: number }) {
   const { t, lang } = useSession();
   const { data, error, loading, reload } = useLoad(() => api<ExamCard[]>("/student/exams/"), [examId]);
   const [agree, setAgree] = useState(false), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
+  const [legal, setLegal] = useState(false), [confirmWb, setConfirmWb] = useState(false);
+  const [chk, setChk] = useState<{ busy: boolean; fix?: Fix; err?: FixError; sensors?: Sensors; done: boolean }>({ busy: false, done: false });
   const now = useNow(500);
   if (loading) return <Loading />;
   if (error) return <ErrorNote error={error} retry={reload} />;
@@ -28,13 +32,34 @@ function PreExam({ examId }: { examId: number }) {
   const started = diff <= 0;
   const blocked = c.state === "done" || c.state === "missed";
 
+  /** Anti-cheat device check: location is verified for real (a position must come back); Wi-Fi and Bluetooth are confirmed
+      by the student where the browser cannot tell. See lib/proctor.ts for what a web page can and cannot read. */
+  async function checkDevice() {
+    setChk({ busy: true, done: false }); setErr("");
+    await startMotion().catch(() => {});  // on iPhone this is the moment iOS asks for motion permission (needs a tap)
+    const sensors = await readSensors();
+    try { const fix = await getFix(20000); setChk({ busy: false, done: true, fix, sensors }); }
+    catch (e: any) { setChk({ busy: false, done: true, err: e as FixError, sensors }); }
+  }
+
   async function start() {
     setErr(""); setBusy(true);
     try {
-      const s = await api<AttemptState>(`/student/exams/${examId}/start/`, { body: { agree_rules: true } });
-      location.replace(`/exam/?attempt=${s.attempt_id}`);
-    } catch (e: any) { setErr(e.message); setBusy(false); }
+      const fix = await getFix(20000);  // a fresh position at the moment she starts proves Location is on
+      const sensors = await readSensors();
+      const st = await api<AttemptState>(`/student/exams/${examId}/start/`, { body: { agree_rules: true, accept_legal: true, location: fix, sensors } });
+      location.replace(`/exam/?attempt=${st.attempt_id}`);
+    } catch (e: any) {
+      setErr(typeof e === "string" ? t(`dev_loc_${e}`) : e.message); setChk((c) => ({ ...c, fix: undefined, err: typeof e === "string" ? e as FixError : c.err, done: true })); setBusy(false);
+    }
   }
+
+  const bleOff = chk.sensors?.ble === "off";
+  const locOk = !!chk.fix && !chk.err;
+  const ready = agree && legal && locOk && confirmWb && !bleOff;
+  const legalText = t("legal_accept").split(/(\{terms\}|\{privacy\})/).map((part, i) =>
+    part === "{terms}" ? <a key={i} href="/terms/" target="_blank" rel="noopener">{t("foot_terms")}</a>
+      : part === "{privacy}" ? <a key={i} href="/privacy/" target="_blank" rel="noopener">{t("foot_privacy")}</a> : part);
 
   return (
     <div className="card">
@@ -55,9 +80,25 @@ function PreExam({ examId }: { examId: number }) {
       ) : (
         <>
           <label className="switch"><input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} /> {t("agree_rules")}</label>
+          <section className="dev-check" aria-labelledby="dev-h">
+            <h2 id="dev-h">📍 {t("dev_title")}</h2>
+            <p className="muted small">{t("dev_intro")}</p>
+            <ul className="dev-list">
+              <li className={locOk ? "ok" : chk.err ? "bad" : ""}><b>{t("dev_location")}</b><span>
+                {locOk ? t("dev_loc_ok", { n: Math.round(chk.fix!.accuracy) }) : chk.err ? t(`dev_loc_${chk.err}`) : t("dev_loc_idle")}</span></li>
+              <li className={chk.sensors?.net === "wifi" ? "ok" : ""}><b>{t("dev_wifi")}</b><span>{chk.sensors?.net === "wifi" ? t("dev_wifi_net") : t("dev_unknown")}</span></li>
+              <li className={chk.sensors?.ble === "on" ? "ok" : bleOff ? "bad" : ""}><b>{t("dev_bt")}</b><span>
+                {chk.sensors?.ble === "on" ? t("dev_bt_on") : bleOff ? t("dev_bt_off") : t("dev_unknown")}</span></li>
+              <li><b>{t("dev_motion")}</b><span>{chk.sensors && (chk.sensors.motion === "still" || chk.sensors.motion === "moving") ? t("dev_motion_ok") : t("dev_motion_na")}</span></li>
+            </ul>
+            <button className="btn" disabled={chk.busy || busy} onClick={checkDevice}>{chk.busy ? t("dev_checking") : t("dev_check")}</button>
+            <label className="switch"><input type="checkbox" checked={confirmWb} onChange={(e) => setConfirmWb(e.target.checked)} /> {t("dev_confirm")}</label>
+          </section>
+          <label className="switch"><input type="checkbox" checked={legal} onChange={(e) => setLegal(e.target.checked)} /> <span>{legalText}</span></label>
           {!started && <p className="center-text" role="timer"><span className="muted">{t("starts_in")}</span><span className="big-num" style={{ display: "block" }}>{clock(diff)}</span></p>}
           {err && <p className="no" role="alert">⚠ {err}</p>}
-          <button className="btn primary big" disabled={!started || !agree || busy} onClick={start}>{busy ? t("loading") : t("start")}</button>
+          {started && !ready && <p className="muted small" role="status">{t("dev_need_all")}</p>}
+          <button className="btn primary big" disabled={!started || !ready || busy} onClick={start}>{busy ? t("loading") : t("start")}</button>
         </>
       )}
     </div>
@@ -88,6 +129,7 @@ function Runner({ attemptId }: { attemptId: number }) {
   const [sound, setSound] = useState(true);
   const flushing = useRef(false), fired = useRef<Set<number>>(new Set()), finishing = useRef(false);
   const now = useNow(250);
+  const proctor = useProctor(st && !st.finished ? attemptId : null);  // sends the position every few seconds while the exam runs
 
   useEffect(() => { setSound(localStorage.getItem("amani_sound") !== "off"); }, []);
 
@@ -209,8 +251,8 @@ function Runner({ attemptId }: { attemptId: number }) {
           <span className="big-num" aria-hidden>{st.time_over ? "⏰" : "🎉"}</span>
           <h1>{st.time_over ? t("time_over") : t("exam_submitted")}</h1>
           <p>{st.message}</p>
-          <p><b>{st.results_note}</b></p>
         </div>
+        {st.results_at && <ResultsWaiting attemptId={st.attempt_id} title={st.title} resultsAt={st.results_at} serverTime={st.server_time} />}
         {st.tips && st.tips.length > 0 && (
           <div className="card"><h2>{t("tips_title")}</h2>
             <ul className="list tips">{st.tips.map((tip, i) => <li key={i}><div className="tip-tag">{t(`tip_${tip.kind}`)}</div>{tip.text}</li>)}</ul>
@@ -228,14 +270,27 @@ function Runner({ attemptId }: { attemptId: number }) {
   const q = st.question!;
   const total = st.total_questions, idx = st.index || 1;
   const low = remainingMs < 5 * 60_000;
+  if (proctor.state === "denied" || proctor.state === "lost") {
+    // Location was switched off: the question is hidden until it is back. The timer keeps running on the server.
+    return (
+      <div className="overlay" role="alertdialog" aria-labelledby="loc-h"><div>
+        <span className="big-num" aria-hidden>📍</span>
+        <h1 id="loc-h">{t("loc_lost_title")}</h1>
+        <p>{proctor.state === "denied" ? t("loc_denied_body") : t("loc_lost_body")}</p>
+        <p className={`timer ${low ? "low" : ""}`} role="timer" aria-label={t("time_left")}>{clock(remainingMs)}</p>
+        <button className="btn primary big" onClick={() => proctor.retry()}>{t("loc_retry")}</button>
+      </div></div>
+    );
+  }
   return (
     <div className="no-select" onCopy={(e) => e.preventDefault()} onCut={(e) => e.preventDefault()} onPaste={(e) => e.preventDefault()}
       onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
       {offline && <div className="offline-banner" role="status">📡 {t("offline_banner")}</div>}
       {banner && <div className="warn-banner" role="alert">⏳ {banner}</div>}
+      {proctor.bleOff && <div className="offline-banner" role="status">📶 {t("bt_warn")}</div>}
       <div className="exam-head">
         <div className="row">
-          <div className="grow"><b>{st.title}</b><div className="small muted" aria-live="polite">{t("question_x_of_y", { x: idx, y: total })}</div></div>
+          <div className="grow"><b>{st.title}</b><div className="small muted" aria-live="polite">{t("question_x_of_y", { x: idx, y: total })} · <span title={proctor.accuracy ? `±${proctor.accuracy} m` : ""}>📍 {t("loc_on")}</span></div></div>
           <button className="btn icon" aria-pressed={sound} aria-label={t("sound")} onClick={() => { const v = !sound; setSound(v); localStorage.setItem("amani_sound", v ? "on" : "off"); }}>{sound ? "🔔" : "🔕"}</button>
           <div className={`timer ${low ? "low" : ""}`} role="timer" aria-label={t("time_left")}>{low ? "⏳ " : ""}{clock(remainingMs)}</div>
         </div>

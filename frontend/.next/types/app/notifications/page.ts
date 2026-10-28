@@ -1,4 +1,4 @@
-// File: C:\Users\DarkSeid\Desktop\amani_exams\amani_exams\frontend\app\notifications\page.tsx
+// File: C:\Users\DarkSeid\Desktop\Work\amani_exams\frontend\app\notifications\page.tsx
 import * as entry from '../../../../app/notifications/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

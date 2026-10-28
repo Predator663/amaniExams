@@ -1,0 +1,5 @@
+Live monitor update v3 (auto-detects exams starting, no refresh)
+1. Copy exams/views.py and exams/tests.py (fixes the 500 on exams with no start/end time).
+2. Copy frontend/components/LiveBoard.tsx, frontend/app/globals.css and frontend/app/staff/monitor/page.tsx
+   (replaces your current monitor page).
+3. python manage.py test exams

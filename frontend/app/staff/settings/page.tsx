@@ -45,7 +45,6 @@ function School() {
         <label className="field"><span>Default theme</span><select className="input" value={v.default_theme} onChange={(e) => up({ default_theme: e.target.value })}>{THEMES.map((t) => <option key={t}>{t}</option>)}</select></label>
         <label className="field"><span>Default language</span><select className="input" value={v.default_language} onChange={(e) => up({ default_language: e.target.value })}><option value="en">English</option><option value="sw">Kiswahili</option></select></label>
       </div>
-      <label className="switch"><input type="checkbox" checked={v.question_approval_required} onChange={(e) => up({ question_approval_required: e.target.checked })} /> Admin must approve teachers’ questions</label>
       <label className="switch"><input type="checkbox" checked={v.leaderboard_enabled} onChange={(e) => up({ leaderboard_enabled: e.target.checked })} /> Class leaderboard (XP only)</label>
       <label className="switch"><input type="checkbox" checked={v.show_class_position} onChange={(e) => up({ show_class_position: e.target.checked })} /> Show class position on results</label>
       <Msg errs={errs} ok={ok} /><button className="btn primary" onClick={save}>Save settings</button>

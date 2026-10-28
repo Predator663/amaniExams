@@ -5,7 +5,7 @@ import type { Question } from "@/lib/types";
 
 /** The six auto-marked question types (QB-01). `value` is exactly what the API expects as the response. */
 export function initialValue(q: Question): any {
-  if (q.type === "ordering") return (q.content.items as any[]).map((i) => i.id);
+  if (q.type === "ordering") return ((q.content?.items || []) as any[]).map((i) => i.id);
   if (q.type === "mcq_multi") return [];
   if (q.type === "matching") return {};
   if (q.type === "fill_blank") return "";
@@ -22,6 +22,12 @@ export function hasAnswer(q: Question, v: any): boolean {
 export default function QuestionView({ q, value, onChange, disabled }: { q: Question; value: any; onChange: (v: any) => void; disabled?: boolean }) {
   const { t } = useSession();
   const c = q.content || {};
+  // Ordering: `value` can be undefined (builder preview) or stale (items edited). Always rebuild a valid order.
+  const items: any[] = c.items || [];
+  const itemIds: string[] = items.map((x: any) => x.id);
+  const order: string[] = q.type === "ordering"
+    ? [...(Array.isArray(value) ? (value as string[]).filter((id) => itemIds.includes(id)) : []), ...itemIds.filter((id) => !(Array.isArray(value) ? value : []).includes(id))]
+    : [];
   return (
     <div className="question">
       <RichHtml html={q.prompt} className="prompt" />
@@ -89,15 +95,15 @@ export default function QuestionView({ q, value, onChange, disabled }: { q: Ques
       {q.type === "ordering" && (
         <ol className="ordering" aria-label={t("order_help")}>
           <p className="muted small">{t("order_help")}</p>
-          {(value as string[]).map((id, i) => {
-            const it = c.items.find((x: any) => x.id === id);
-            const move = (d: number) => { const n = [...value]; const j = i + d; if (j < 0 || j >= n.length) return; [n[i], n[j]] = [n[j], n[i]]; onChange(n); };
+          {order.map((id, i) => {
+            const it = items.find((x: any) => x.id === id);
+            const move = (d: number) => { const n = [...order]; const j = i + d; if (j < 0 || j >= n.length) return; [n[i], n[j]] = [n[j], n[i]]; onChange(n); };
             return (
               <li key={id} className="order-row">
                 <span className="num">{i + 1}</span>
                 <span className="grow"><ItemContent item={it} /></span>
                 <button className="btn icon" disabled={disabled || i === 0} onClick={() => move(-1)} aria-label={t("move_up")}>↑</button>
-                <button className="btn icon" disabled={disabled || i === value.length - 1} onClick={() => move(1)} aria-label={t("move_down")}>↓</button>
+                <button className="btn icon" disabled={disabled || i === order.length - 1} onClick={() => move(1)} aria-label={t("move_down")}>↓</button>
               </li>
             );
           })}

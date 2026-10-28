@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import ExamBanner from "@/components/ExamBanner";
+import ExamSections from "@/components/ExamSections";
 import Shell from "@/components/Shell";
 import { Bar, CountUp, ErrorNote, Loading, Modal, useLoad } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -35,8 +35,7 @@ function StudentHome() {
     <>
       <h1>{t("hello", { name: user!.first_name || user!.username })} <span className="wave" aria-hidden>👋</span></h1>
 
-      <h2>{t("upcoming_exams")}</h2>
-      {exams.loading ? <Loading /> : exams.error ? <ErrorNote error={exams.error} retry={exams.reload} /> : <ExamBanner cards={exams.data || []} />}
+      {exams.loading ? <Loading /> : exams.error ? <ErrorNote error={exams.error} retry={exams.reload} /> : <ExamSections cards={exams.data || []} />}
 
       {fresh.length > 0 && (
         <>

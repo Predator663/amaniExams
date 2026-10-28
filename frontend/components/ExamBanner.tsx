@@ -6,13 +6,13 @@ import type { ExamCard } from "@/lib/types";
 import { useNow } from "./ui";
 
 /** HOME-01/02: days remaining, switching to hours and minutes on the exam day; 'Exam today'; 'Starts in 10 minutes'. */
-export default function ExamBanner({ cards }: { cards: ExamCard[] }) {
+export default function ExamBanner({ cards, label }: { cards: ExamCard[]; label?: string }) {
   const { t, lang } = useSession();
   const now = useNow(1000);
   if (!cards.length) return <div className="card"><p className="muted">{t("no_upcoming")}</p></div>;
   const n = now + makeOffset(cards[0].server_time);  // server time, not the phone's clock (BR-03)
   return (
-    <div className="snap" role="list" aria-label={t("upcoming_exams")}>
+    <div className="snap" role="list" aria-label={label || t("upcoming_exams")}>
       {cards.map((c) => {
         const start = new Date(c.start_at).getTime(), end = new Date(c.end_at).getTime();
         const diff = start - n;

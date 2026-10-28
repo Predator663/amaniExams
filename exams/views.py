@@ -2,7 +2,7 @@ import logging
 import random
 from datetime import timedelta
 
-from django.db.models import Avg, Count, Q
+from django.db.models import Avg, Count, Max, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers, viewsets
@@ -16,7 +16,10 @@ from accounts.permissions import IsAdminRole, IsStaffUser, IsStudent
 from core.models import SchoolSettings, audit
 from core.views import online_ids
 from questions.models import Question
+from questions.views import QuestionSerializer
+from proctoring import services as proctoring
 from . import services
+from .sections import letters, qtype_rank
 from .models import Answer, Attempt, AttemptEvent, Exam, ExamGrant, ExamQuestion, Result
 from .services import ExamError
 
@@ -70,10 +73,23 @@ def student_start(request, exam_id):
     exam = get_object_or_404(services.exams_for_student(request.user), pk=exam_id)
     if not request.data.get("agree_rules"):  # EDAY-02
         return Response({"detail": "Please tick that you have read and agree to the rules.", "code": "rules"}, status=400)
+    fix = None
+    if proctoring.enabled():
+        # Terms + Privacy policy (which cover location monitoring) must be accepted for every exam, and the phone must
+        # prove that location services are on by sending a position.
+        if not request.data.get("accept_legal"):
+            return Response({"detail": "Please accept the Terms of use and the Privacy policy before you begin.", "code": "legal"}, status=400)
+        fix = proctoring.parse_fix(request.data.get("location") or {})
+        if not fix:
+            return Response({"detail": "Turn on location services (GPS), allow location for this app, then try again. "
+                                       "Your location is needed during the exam.", "code": "location_required"}, status=400)
     try:
         attempt = services.start_attempt(exam, request.user)
     except ExamError as e:
         return _err(e)
+    if proctoring.enabled():
+        proctoring.record_acceptance(request.user, exam)
+        proctoring.ingest(attempt, fix, speed=None, heading=None, sensors=request.data.get("sensors"))
     return Response(services.attempt_state(attempt), status=201)
 
 
@@ -161,6 +177,21 @@ def my_results(request):
             rows.append({"attempt_id": r.attempt_id, "exam": r.exam.title, "subject": r.exam.subject.name,
                          "percent": r.percent, "grade": r.grade, "date": r.exam.start_at})
     return Response(sorted(rows, key=lambda x: x["date"], reverse=True))
+
+
+@api_view(["GET"])
+@permission_classes([IsStudent])
+def my_results_pending(request):
+    """Exams I have submitted whose results are not out yet, with the time they will be. Running sync_exam
+    here publishes anything that is due (and sends the results-ready notification) without waiting for cron."""
+    now = timezone.now()
+    rows = []
+    for a in Attempt.objects.filter(student=request.user).exclude(status=Attempt.IN_PROGRESS).select_related("exam__subject"):
+        services.sync_exam(a.exam, now)
+        if not services.result_visible(a, now):
+            rows.append({"attempt_id": a.pk, "exam": a.exam.title, "subject": a.exam.subject.name,
+                         "results_at": services.release_time(a), "server_time": now})
+    return Response(sorted(rows, key=lambda r: r["results_at"]))
 
 
 @api_view(["GET"])
@@ -299,11 +330,68 @@ class ExamViewSet(viewsets.ModelViewSet):
         """The exam's own copy of its questions (QB-11), for staff: needed to void a faulty question (EXM-08).
         Correct answers are not included here; only students never see them before results, and staff wrote them."""
         exam = self.get_object()
+        rows = list(exam.questions.order_by("position"))
+        sec = letters(r.payload.get("qtype") for r in rows)
         return Response([
             {"id": q.pk, "source": q.source_id, "position": q.position, "voided": q.voided, "void_reason": q.void_reason,
              "prompt": q.payload.get("prompt", ""), "qtype": q.payload.get("qtype"), "marks": q.payload.get("marks"),
-             "topic": q.payload.get("topic", ""), "difficulty": q.payload.get("difficulty", "")}
-            for q in exam.questions.order_by("position")])
+             "topic": q.payload.get("topic", ""), "difficulty": q.payload.get("difficulty", ""),
+             "section": sec.get(q.payload.get("qtype"), "")}
+            for q in rows])
+
+    # ---- the question picker: approved questions of this exam's subject, paged and filtered ----
+    @action(detail=True, methods=["get"])
+    def bank(self, request, pk=None):
+        exam = self.get_object()
+        p = request.query_params
+        base = Question.objects.filter(subject=exam.subject, status=Question.APPROVED)
+        topics = sorted(set(base.exclude(topic="").values_list("topic", flat=True)))
+        qs = base.annotate(used_count=Count("examquestion", filter=~Q(examquestion__exam=exam), distinct=True),
+                           last_used=Max("examquestion__exam__start_at", filter=~Q(examquestion__exam=exam)))
+        for f in ("topic", "difficulty", "qtype", "form_level"):
+            if p.get(f):
+                qs = qs.filter(**{f: p[f]})
+        if p.get("q"):
+            qs = qs.filter(Q(prompt__icontains=p["q"]) | Q(topic__icontains=p["q"]) | Q(subtopic__icontains=p["q"]))
+        if p.get("usage") == "used":
+            qs = qs.filter(used_count__gt=0)
+        elif p.get("usage") == "unused":
+            qs = qs.filter(used_count=0)
+        qs = qs.order_by({"oldest": "created_at", "topic": "topic"}.get(p.get("sort"), "-created_at"), "-id")
+        try:
+            size = min(max(int(p.get("page_size", 10)), 1), 50)
+            page = max(int(p.get("page", 1)), 1)
+        except ValueError:
+            raise ValidationError({"detail": "page and page_size must be numbers."})
+        count = qs.count()
+        pages = max(1, -(-count // size))
+        page = min(page, pages)
+        rows = list(qs[(page - 1) * size: page * size])
+        data = QuestionSerializer(rows, many=True).data
+        for row, q in zip(data, rows):
+            row["used_count"], row["last_used"] = q.used_count, q.last_used
+        return Response({"count": count, "page": page, "pages": pages, "page_size": size,
+                         "topics": topics, "total_approved": base.count(), "results": data})
+
+    @action(detail=True, methods=["post"])
+    def pick(self, request, pk=None):
+        """Random questions by rule (topic / difficulty / how many) for the builder to add to its selection."""
+        exam = self.get_object()
+        self._editable(exam)
+        exclude = {int(x) for x in request.data.get("exclude", []) if str(x).isdigit()}
+        rng, out = random.SystemRandom(), []
+        for rule in request.data.get("rules", []):
+            pool = Question.objects.filter(subject=exam.subject, status=Question.APPROVED).exclude(pk__in=exclude)
+            for f in ("topic", "difficulty", "form_level"):
+                if rule.get(f):
+                    pool = pool.filter(**{f: rule[f]})
+            pool, n = list(pool), int(rule.get("count", 0))
+            if len(pool) < n:
+                raise ValidationError({"rules": f"Only {len(pool)} unselected approved question(s) match {rule}; {n} requested."})
+            for q in rng.sample(pool, n):
+                exclude.add(q.pk)
+                out.append(q)
+        return Response(QuestionSerializer(out, many=True).data)
 
     # ---- paper: pick questions and/or random rules (EXM-01) --------------------------------
     @action(detail=True, methods=["post"])
@@ -312,8 +400,9 @@ class ExamViewSet(viewsets.ModelViewSet):
         self._editable(exam)
         if not _teaches(request.user, exam.subject_id):
             raise PermissionDenied()
-        picked = list(Question.objects.filter(pk__in=request.data.get("question_ids", []), subject=exam.subject))
-        chosen = {q.pk: q for q in picked}
+        ids = [int(x) for x in request.data.get("question_ids", []) if str(x).isdigit()]
+        found = {q.pk: q for q in Question.objects.filter(pk__in=ids, subject=exam.subject)}
+        chosen = {i: found[i] for i in ids if i in found}  # keeps the order the teacher picked
         rng = random.SystemRandom()
         for rule in request.data.get("rules", []):
             pool = Question.objects.filter(subject=exam.subject, status=Question.APPROVED).exclude(pk__in=chosen)
@@ -331,7 +420,9 @@ class ExamViewSet(viewsets.ModelViewSet):
         if not chosen:
             raise ValidationError({"detail": "Choose at least one question."})
         exam.questions.all().delete()
-        for pos, q in enumerate(chosen.values(), start=1):  # a private copy for this exam (QB-11)
+        # Section A, B, C ... : grouped by type, in the order they were picked inside each section.
+        ordered = sorted(chosen.values(), key=lambda q: qtype_rank(q.qtype))  # sorted() is stable
+        for pos, q in enumerate(ordered, start=1):  # a private copy for this exam (QB-11)
             ExamQuestion.objects.create(exam=exam, position=pos, source=q, payload={
                 "qtype": q.qtype, "prompt": q.prompt, "content": q.content, "answer": q.answer, "marks": q.marks,
                 "explanation": q.explanation, "topic": q.topic, "subtopic": q.subtopic, "difficulty": q.difficulty,
@@ -435,43 +526,128 @@ class ExamViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def monitor(self, request, pk=None):
-        """ADM-06 / TCH-08: admins get names; teachers get numbers only."""
+        """ADM-06 / TCH-08: one exam. Admins get names, parent phones and per-student detail;
+        teachers get counts and index numbers only."""
         exam = self.get_object()
         services.sync_exam(exam)
-        eligible = services.eligible_students(exam)
-        attempts = {a.student_id: a for a in exam.attempts.select_related("student").order_by("attempt_no")}
-        in_progress = [a for a in attempts.values() if a.status == Attempt.IN_PROGRESS]
-        data = {
-            "status": exam.status, "eligible": eligible.count(),
-            "not_started": eligible.count() - len(attempts), "in_progress": len(in_progress),
-            "submitted": len(attempts) - len(in_progress),
-        }
-        if request.user.is_admin_role:
-            flags = dict(AttemptEvent.objects.filter(attempt__exam=exam, kind="left_screen")
-                         .values_list("attempt__student_id").annotate(n=Count("id")))
-            data["not_started_students"] = [
-                {"id": s.pk, "name": f"{s.first_name} {s.last_name}", "class": str(s.school_class), "index": s.index_number}
-                for s in eligible.exclude(pk__in=attempts.keys()).select_related("school_class")]
-            data["screen_leave_flags"] = [  # information only (EDAY-11)
-                {"student_id": sid, "times_left_screen": n} for sid, n in flags.items()]
-            online = online_ids()  # students send a heartbeat to /api/presence/ every ~30 s
-            data["online_now"] = sum(1 for a in in_progress if a.student_id in online)
-            data["connection_problems"] = [  # writing, but no heartbeat for 90 s (ADM-06)
-                {"id": a.student_id, "name": f"{a.student.first_name} {a.student.last_name}"}
-                for a in in_progress if a.student_id not in online]
-            # Per-student view for the live monitor screen: how far she is, time left, online, left the screen.
-            answered = dict(Answer.objects.filter(attempt__in=in_progress).values_list("attempt_id").annotate(n=Count("id")))
-            now = timezone.now()
-            klass = {s.pk: str(s.school_class) for s in eligible.select_related("school_class")}
-            data["total_questions"] = exam.questions.count()
-            data["in_progress_students"] = sorted((
-                {"id": a.student_id, "name": f"{a.student.first_name} {a.student.last_name}", "class": klass.get(a.student_id, ""), "index": a.student.index_number,
-                 "answered": answered.get(a.pk, 0), "seconds_left": max(0, int((a.deadline_at - now).total_seconds())),
-                 "online": a.student_id in online, "left_screen": flags.get(a.student_id, 0)}
-                for a in in_progress), key=lambda r: r["name"])
-            data["submitted_students"] = sorted((
-                {"id": a.student_id, "name": f"{a.student.first_name} {a.student.last_name}", "class": klass.get(a.student_id, ""), "index": a.student.index_number,
-                 "left_screen": flags.get(a.student_id, 0)}
-                for a in attempts.values() if a.status != Attempt.IN_PROGRESS), key=lambda r: r["name"])
-            data["server_time"] = now.isoformat()
-        return Response(data)
+        return Response(_monitor_exam(exam, request.user, timezone.now(), online_ids()))
+
+    @action(detail=False, methods=["get"], url_path="monitor-board")
+    def monitor_board(self, request):
+        """Live monitor, whole school in ONE request: every exam that is live now, plus anything that
+        finished or was submitted in the last 24 h (so submitted exams never vanish from the board).
+        Counts come from grouped queries, not per-row lookups, so it stays light."""
+        now = timezone.now()
+        try:
+            days = max(1, min(int(request.query_params.get("days", 1)), 400))
+        except ValueError:
+            days = 1
+        since = now - timedelta(days=days)
+        exams = list(self.get_queryset().filter(
+            Q(status=Exam.LIVE) | Q(end_at__gte=since, start_at__lte=now)
+            | Q(status=Exam.SCHEDULED, start_at__gt=now, start_at__lte=now + timedelta(hours=3)))
+            .select_related("subject").prefetch_related("classes").distinct().order_by("-start_at")[:60])
+        for e in exams:
+            services.sync_exam(e, now)
+        online = online_ids()
+        cache = {}
+        board = [_monitor_exam(e, request.user, now, online, cache) for e in exams]
+        board.sort(key=lambda d: (d["status"] != Exam.LIVE, d["status"] != Exam.SCHEDULED, -d["start_at_ts"]))
+        return Response({"server_time": now.isoformat(), "exams": board,
+                         "totals": {"live_exams": sum(1 for d in board if d["status"] == Exam.LIVE),
+                                    "writing": sum(d["in_progress"] for d in board),
+                                    "submitted": sum(d["submitted"] for d in board)}})
+
+
+def _ts(obj, *names):
+    """First timestamp field that exists on the attempt, as ISO text (the model may name it differently)."""
+    for n in names:
+        v = getattr(obj, n, None)
+        if v:
+            return v.isoformat()
+    return None
+
+
+def _parents(students, cache=None):
+    """{student_id: [{name, phone, relationship}]} from the Parents page (encrypted at rest, decrypted
+    here for administrators only). `cache` lets one board request decrypt each guardian once."""
+    cache = {} if cache is None else cache
+    out = {}
+    try:
+        from guardians.models import GuardianLink
+        ids = [s.pk for s in students]
+        for link in GuardianLink.objects.filter(student_id__in=ids).select_related("guardian").order_by("id"):
+            g = link.guardian
+            if g.pk not in cache:
+                cache[g.pk] = {"name": g.name, "phone": g.phone, "relationship": g.relationship}
+            out.setdefault(link.student_id, []).append(cache[g.pk])
+    except Exception:
+        logging.getLogger(__name__).exception("parent lookup failed")
+    return out
+
+
+def _monitor_exam(exam, user, now, online, cache=None):
+    """Everything the monitor shows for one exam. Fixes: submitted students are always returned
+    (all attempts, not only the live ones), and the exam stays visible after it closes."""
+    is_admin = user.is_admin_role
+    eligible_qs = services.eligible_students(exam).select_related("school_class")
+    eligible = list(eligible_qs)
+    by_id = {s.pk: s for s in eligible}
+    attempts = list(exam.attempts.select_related("student", "student__school_class").order_by("attempt_no"))
+    latest = {}
+    for a in attempts:  # latest attempt per student decides her state
+        latest[a.student_id] = a
+        by_id.setdefault(a.student_id, a.student)
+    live = [a for a in latest.values() if a.status == Attempt.IN_PROGRESS]
+    done = [a for a in latest.values() if a.status != Attempt.IN_PROGRESS]
+    data = {
+        "exam_id": exam.pk, "title": exam.title, "subject": exam.subject.name, "status": exam.status,
+        "classes": [str(c) for c in exam.classes.all()],
+        "start_at": exam.start_at.isoformat() if exam.start_at else None,
+        "end_at": exam.end_at.isoformat() if exam.end_at else None,
+        "start_at_ts": exam.start_at.timestamp() if exam.start_at else 0,
+        "duration_minutes": exam.duration_minutes or 0,
+        "eligible": len(eligible), "in_progress": len(live), "submitted": len(done),
+        "not_started": max(0, len(eligible) - len(latest)),
+        "total_questions": exam.questions.filter(voided=False).count(), "server_time": now.isoformat(),
+    }
+    if not is_admin:
+        return data
+    data["proximity_alerts"] = exam.proximity_alerts.filter(active=True, acknowledged_at__isnull=True).count()
+    flags = dict(AttemptEvent.objects.filter(attempt__exam=exam, kind="left_screen")
+                 .values_list("attempt__student_id").annotate(n=Count("id")))
+    answered = dict(Answer.objects.filter(attempt__exam=exam, skipped=False).values_list("attempt_id").annotate(n=Count("id")))  # skipped questions do not count as answered
+    parents = _parents(by_id.values(), cache)
+
+    def row(a, extra=None):
+        st = a.student
+        r = {"id": st.pk, "name": f"{st.first_name} {st.last_name}".strip() or st.username,
+             "class": str(st.school_class) if st.school_class_id else "", "index": st.index_number,
+             "parents": parents.get(st.pk, []), "left_screen": flags.get(st.pk, 0),
+             "answered": answered.get(a.pk, 0),
+             "started_at": _ts(a, "started_at", "created_at", "start_at"),
+             "attempt_no": a.attempt_no}
+        r.update(extra or {})
+        return r
+
+    data["in_progress_students"] = sorted((row(a, {
+        "seconds_left": max(0, int((a.deadline_at - now).total_seconds())),
+        "online": a.student_id in online}) for a in live), key=lambda r: (r["class"], r["name"]))
+    data["submitted_students"] = sorted((row(a, {
+        "submitted_at": _ts(a, "submitted_at", "finished_at", "ended_at"),
+        "auto_submitted": a.status == Attempt.AUTO_SUBMITTED,
+        "completion": "full" if data["total_questions"] and answered.get(a.pk, 0) >= data["total_questions"] else "partial"})
+        for a in done),
+        key=lambda r: (r["class"], r["name"]))
+    data["not_started_students"] = sorted((
+        {"id": s.pk, "name": f"{s.first_name} {s.last_name}".strip() or s.username,
+         "class": str(s.school_class) if s.school_class_id else "", "index": s.index_number,
+         "parents": parents.get(s.pk, [])} for s in eligible if s.pk not in latest),
+        key=lambda r: (r["class"], r["name"]))
+    data["full"] = sum(1 for r in data["submitted_students"] if r["completion"] == "full")
+    data["partial"] = len(data["submitted_students"]) - data["full"]
+    data["online_now"] = sum(1 for a in live if a.student_id in online)
+    data["connection_problems"] = [{"id": r["id"], "name": r["name"]}
+                                   for r in data["in_progress_students"] if not r["online"]]
+    data["screen_leave_flags"] = [{"student_id": k, "times_left_screen": v} for k, v in flags.items()]
+    return data

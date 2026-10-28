@@ -10,7 +10,7 @@ from rest_framework.response import Response
 
 from academics.models import TeacherAssignment
 from accounts.permissions import IsAdminRole, IsStaffUser
-from core.models import SchoolSettings, audit
+from core.models import audit
 from .models import Question, QuestionImage, QuestionVersion
 from .validation import clean_prompt, validate_question
 
@@ -60,6 +60,9 @@ class QuestionViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(**{f: p[f]})
         if p.get("q"):
             qs = qs.filter(Q(prompt__icontains=p["q"]) | Q(topic__icontains=p["q"]))
+        if p.get("ids"):  # the exam builder loads the questions it already has by id
+            ids = [int(x) for x in p["ids"].split(",") if x.strip().isdigit()]
+            qs = qs.filter(pk__in=ids)
         return qs
 
     def _snapshot(self, q):
@@ -70,7 +73,9 @@ class QuestionViewSet(viewsets.ModelViewSet):
         subject = serializer.validated_data["subject"]
         if not _can_write_subject(self.request.user, subject.pk):
             raise PermissionDenied("You can only write questions for your assigned subjects.")
-        q = serializer.save(created_by=self.request.user)
+        # A question a teacher submits is approved straight away, so it can go into an exam at once.
+        submit_now = str(self.request.data.get("submit", "")).lower() in ("1", "true", "yes")
+        q = serializer.save(created_by=self.request.user, status=Question.APPROVED if submit_now else Question.DRAFT)
         QuestionVersion.objects.create(question=q, version=1, snapshot=self._snapshot(q), edited_by=self.request.user)
 
     def perform_update(self, serializer):
@@ -78,11 +83,7 @@ class QuestionViewSet(viewsets.ModelViewSet):
         new_subject = serializer.validated_data.get("subject", q.subject)
         if not (_can_write_subject(self.request.user, q.subject_id) and _can_write_subject(self.request.user, new_subject.pk)):
             raise PermissionDenied("You can only edit questions for your assigned subjects.")
-        q = serializer.save(version=q.version + 1)
-        # An approved question that a teacher edits must be approved again (if approval is on).
-        if q.status == Question.APPROVED and not self.request.user.is_admin_role and SchoolSettings.load().question_approval_required:
-            q.status = Question.SUBMITTED
-            q.save(update_fields=["status"])
+        q = serializer.save(version=q.version + 1)  # an edited approved question stays approved
         QuestionVersion.objects.create(question=q, version=q.version, snapshot=self._snapshot(q), edited_by=self.request.user)
 
     def perform_destroy(self, instance):
@@ -99,7 +100,7 @@ class QuestionViewSet(viewsets.ModelViewSet):
         q = self.get_object()
         if not _can_write_subject(request.user, q.subject_id):
             raise PermissionDenied()
-        q.status = Question.SUBMITTED if SchoolSettings.load().question_approval_required else Question.APPROVED
+        q.status = Question.APPROVED  # no waiting for an administrator: it is visible to the exam builder now
         q.save(update_fields=["status"])
         return Response({"status": q.status})
 

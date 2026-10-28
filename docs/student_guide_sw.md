@@ -26,6 +26,11 @@
 - Wakati wa kuanza ukifika, kitufe cha **ANZA** kinawaka. Soma kanuni na uweke tiki **Nimesoma na nakubali kanuni**.
 - Unaweza kuanza hadi **muda wa kuchelewa** (kawaida dakika 10) baada ya kuanza. Ukianza kuchelewa, **huongezewi muda**.
 
+### Mipangilio ya simu na eneo (kila mtihani)
+- Kabla ya kubonyeza ANZA lazima: uwashe **Eneo (GPS)**, **Wi-Fi** na **Bluetooth**, uruhusu Eneo kwa programu, ubonyeze **Kagua simu yangu**, uthibitishe, na ukubali **Masharti ya matumizi** na **Sera ya faragha**.
+- Acha Eneo, Wi-Fi na Bluetooth vikiwa vimewashwa hadi uwasilishe. Eneo lako hutumika tu kukagua kuwa wanafunzi wanakaa angalau mita 20 kutoka kwa kila mmoja. Eneo likizimwa, maswali yako hufichwa hadi uliwashe tena, na saa inaendelea.
+- Kaa mbali na wanafunzi wengine wanaofanya mtihani huohuo.
+
 ## 5. Wakati wa mtihani
 - Swali moja kwa wakati. Juu ya skrini unaona **Swali la 7 kati ya 40** na **saa ya kuhesabu muda**.
 - Chagua au andika jibu lako, kisha bonyeza **Wasilisha**. Swali linalofuata linaonekana.

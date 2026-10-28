@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "analytics",
     "gamification",
     "guardians",
+    "proctoring",
 ]
 
 MIDDLEWARE = [
@@ -140,6 +141,17 @@ REST_FRAMEWORK = {
 # Generate keys with:  pip install pywebpush && vapid --gen   (or any VAPID key tool)
 # Secret that encrypts parents' names and phone numbers. Not stored in the database. See guardians/crypto.py.
 GUARDIAN_KEY = os.environ.get("GUARDIAN_KEY", "")
+
+# Anti-cheat: proximity monitoring during exams (see proctoring/ and the Privacy policy section on location).
+PROCTORING_ENABLED = os.environ.get("PROCTORING_ENABLED", "1") == "1"
+PROXIMITY_ALERT_METERS = float(os.environ.get("PROXIMITY_ALERT_METERS", "20"))   # alert when two students are closer than this
+LOCATION_STALE_SECONDS = int(os.environ.get("LOCATION_STALE_SECONDS", "45"))      # a position older than this is not used
+PROXIMITY_CLEAR_SECONDS = int(os.environ.get("PROXIMITY_CLEAR_SECONDS", "60"))    # an alert ends after this long apart
+LOCATION_MAX_ACCURACY = float(os.environ.get("LOCATION_MAX_ACCURACY", "100"))     # fixes worse than this (metres) are shown but not compared
+# Place names (street, district, country) for administrators. "" switches it off. Point it at your own Nominatim server to keep all data in-house.
+GEOCODER_URL = os.environ.get("GEOCODER_URL", "https://nominatim.openstreetmap.org/reverse")
+GEOCODER_USER_AGENT = os.environ.get("GEOCODER_USER_AGENT", "AmaniExams/1.0 (school exam system; contact: " + os.environ.get("VAPID_CONTACT_EMAIL", "admin@example.com") + ")")
+LEGAL_VERSION = "2026-10-28"  # bump when the Terms or Privacy policy change; shown to students and stored with each acceptance
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 VAPID_CONTACT_EMAIL = os.environ.get("VAPID_CONTACT_EMAIL", "admin@example.com")

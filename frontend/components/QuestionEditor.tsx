@@ -70,13 +70,15 @@ function ItemRow({ it, onChange, onRemove, extra, label, canRemove }: { it: Item
   );
 }
 
-export default function QuestionEditor({ id, onClose }: { id: number | null; onClose: () => void }) {
+/** `subject` + `onCreated` make it the embedded editor inside the exam builder: the subject is fixed, and the
+ *  question is saved, approved and handed back so the builder can add it to the current exam. */
+export default function QuestionEditor({ id, onClose, subject, onCreated, backLabel }: { id: number | null; onClose: () => void; subject?: number; onCreated?: (q: any) => void; backLabel?: string }) {
   const { user } = useSession();
   const admin = user?.role === "admin" || user?.role === "super_admin";
   const subjects = useLoad(() => api<any[]>("/subjects/"));
   const assigned = useLoad(() => (admin ? Promise.resolve(null) : api<any[]>("/assignments/")), [admin]);
   const existing = useLoad(() => (id ? api<any>(`/questions/${id}/`) : Promise.resolve(null)), [id]);
-  const [s, setS] = useState<S>(fresh), [status, setStatus] = useState("draft"), [errs, setErrs] = useState<string[]>([]), [msg, setMsg] = useState(""), [busy, setBusy] = useState(false);
+  const [s, setS] = useState<S>(() => ({ ...fresh(), subject: subject ? String(subject) : "" })), [status, setStatus] = useState("draft"), [errs, setErrs] = useState<string[]>([]), [msg, setMsg] = useState(""), [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<S | null>(null), [similar, setSimilar] = useState<any[]>([]), [cid, setCid] = useState<number | null>(id), [view, setView] = useState<"phone" | "computer">("phone");
   const key = `amani_qdraft_${id || "new"}`, loaded = useRef(false);
   const up = (p: Partial<S>) => setS((x) => ({ ...x, ...p }));
@@ -116,17 +118,21 @@ export default function QuestionEditor({ id, onClose }: { id: number | null; onC
   }, [s]);
   const [pv, setPv] = useState<any>(undefined);
 
-  async function save(then?: "submit") {
+  async function save(then?: "submit"): Promise<any> {
+    let saved: any = null;
     setBusy(true); setErrs([]); setMsg("");
     try {
       const body = build(s);
       const q = cid ? await api<any>(`/questions/${cid}/`, { method: "PATCH", body }) : await api<any>("/questions/", { body });
       setCid(q.id); setStatus(q.status); setS(fromApi(q)); localStorage.removeItem(key); setDraft(null);
-      if (then === "submit") { const r = await api<any>(`/questions/${q.id}/submit/`, { body: {} }); setStatus(r.status); setMsg(r.status === "approved" ? "Saved and approved." : "Saved and sent for approval."); }
+      saved = q;
+      if (then === "submit") { const r = await api<any>(`/questions/${q.id}/submit/`, { body: {} }); setStatus(r.status); saved = { ...q, status: r.status }; setMsg("Saved and approved. It is now available to the exam builder."); }
       else setMsg("Saved.");
-    } catch (e: any) { setErrs(errorLines(e.data, e.message)); }
+    } catch (e: any) { setErrs(errorLines(e.data, e.message)); saved = null; }
     setBusy(false);
+    return saved;
   }
+  async function saveAndAdd() { const q = await save("submit"); if (q && onCreated) onCreated(q); }
   async function decide(what: "approve" | "reject") {
     setBusy(true);
     try { const r = await api<any>(`/questions/${cid}/${what}/`, { body: what === "reject" ? { reason: window.prompt("Reason (optional)") || "" } : {} }); setStatus(r.status); setMsg(what === "approve" ? "Approved." : "Returned to draft."); } catch (e: any) { setErrs(errorLines(e.data, e.message)); }
@@ -151,13 +157,13 @@ export default function QuestionEditor({ id, onClose }: { id: number | null; onC
   );
 
   return (
-    <div>
-      <div className="row"><button className="btn" onClick={onClose}>← Back to list</button><span className="pill">{cid ? `#${cid}` : "New"} · {status}</span></div>
+    <div className="qeditor">
+      <div className="row"><button className="btn" onClick={onClose}>{backLabel || "← Back to list"}</button><span className="pill">{cid ? `#${cid}` : "New"} · {status}</span></div>
       {draft && <div className="hint" role="status">An unsaved draft from this device was found. <button className="btn" onClick={() => { setS(draft); setDraft(null); }}>Restore it</button> <button className="btn" onClick={() => { localStorage.removeItem(key); setDraft(null); }}>Discard</button></div>}
       {lock && <p className="hint">This question is archived (it was used in an exam).</p>}
       <div className="card">
         <div className="grid2">
-          <label className="field"><span>Subject</span><select className="input" value={s.subject} onChange={(e) => up({ subject: e.target.value })}><option value="">Choose…</option>{mySubjects.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
+          <label className="field"><span>Subject</span><select className="input" value={s.subject} disabled={!!subject} onChange={(e) => up({ subject: e.target.value })}><option value="">Choose…</option>{mySubjects.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
           <label className="field"><span>Form</span><select className="input" value={s.form_level} onChange={(e) => up({ form_level: Number(e.target.value) })}>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>Form {n}</option>)}</select></label>
           <label className="field"><span>Topic</span><input className="input" value={s.topic} onChange={(e) => up({ topic: e.target.value })} /></label>
           <label className="field"><span>Sub-topic</span><input className="input" value={s.subtopic} onChange={(e) => up({ subtopic: e.target.value })} /></label>
@@ -207,8 +213,9 @@ export default function QuestionEditor({ id, onClose }: { id: number | null; onC
       {errs.length > 0 && <div className="card error" role="alert">{errs.map((e, i) => <p key={i}>⚠ {e}</p>)}</div>}
       {msg && <p className="ok" role="status">✓ {msg}</p>}
       <div className="row" style={{ position: "sticky", bottom: 70, background: "var(--bg)", padding: ".5rem 0" }}>
-        <button className="btn" disabled={busy || lock} onClick={() => save()}>Save draft</button>
-        <button className="btn primary" disabled={busy || lock} onClick={() => save("submit")}>Save and submit</button>
+        {onCreated ? <button className="btn primary big" disabled={busy || lock} onClick={saveAndAdd}>✓ Save and add to this exam</button> : <>
+          <button className="btn" disabled={busy || lock} onClick={() => save()}>Save draft</button>
+          <button className="btn primary" disabled={busy || lock} onClick={() => save("submit")}>Save and submit</button></>}
         {admin && cid && status === "submitted" && <><button className="btn primary" disabled={busy} onClick={() => decide("approve")}>Approve</button><button className="btn danger" disabled={busy} onClick={() => decide("reject")}>Send back</button></>}
       </div>
     </div>
