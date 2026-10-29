@@ -188,6 +188,38 @@ class SendTests(GuardianBase):
         b = self.a.post("/api/guardians/send/", {"scope": "class", "class_id": self.zawadi.school_class_id}, format="json").json()
         self.assertEqual((b["messages"], b["students"]), (1, 1))  # only Baba Zawadi, for Zawadi
 
+    def test_optional_custom_message_is_the_last_line_and_is_previewed(self):
+        self.load()
+        note = "Parents’ meeting – Friday 9:00 am"  # curly quote and dash are made plain
+        r = self.a.post("/api/guardians/send/", {"scope": "all", "note": note}, format="json").json()
+        self.assertEqual(r["note"], "Parents' meeting - Friday 9:00 am")
+        self.assertTrue(r["preview"]["text"].endswith(r["note"]))
+        self.assertIn("xxxxxxxx", r["preview"]["text"])  # the preview never holds a real password
+        self.assertEqual(SmsJob.objects.count(), 0)
+        self.a.post("/api/guardians/send/", {"scope": "all", "note": note, "dry_run": False}, format="json")
+        for j in SmsJob.objects.all():
+            body = crypto.decrypt(j.body_enc)
+            self.assertEqual(body.split("\n")[-1], "Parents' meeting - Friday 9:00 am")
+            self.assertEqual(j.note, "Parents' meeting - Friday 9:00 am")
+
+    def test_without_a_custom_message_nothing_is_added(self):
+        self.load()
+        self.a.post("/api/guardians/send/", {"scope": "all", "dry_run": False, "note": "   "}, format="json")
+        for j in SmsJob.objects.all():
+            self.assertEqual(j.note, "")
+            self.assertTrue(crypto.decrypt(j.body_enc).split("\n")[-1].startswith(("Set a new password", "Weka nenosiri")))
+
+    def test_custom_message_too_long_is_refused_and_a_retry_keeps_it(self):
+        self.load()
+        self.assertEqual(self.a.post("/api/guardians/send/", {"scope": "all", "note": "x" * 161}, format="json").status_code, 400)
+        self.a.post("/api/guardians/send/", {"scope": "all", "note": "Meeting Friday", "dry_run": False}, format="json")
+        job = SmsJob.objects.first()
+        SmsJob.objects.filter(pk=job.pk).update(status=SmsJob.SENT, body_enc="")  # sent, then lost: a retry makes a new text
+        SmsJob.objects.filter(pk=job.pk).update(status=SmsJob.FAILED)
+        self.assertEqual(self.a.post(f"/api/guardians/jobs/{job.pk}/retry/", {}, format="json").json()["requeued"], 1)
+        job.refresh_from_db()
+        self.assertTrue(crypto.decrypt(job.body_enc).endswith("Meeting Friday"))
+
     def test_a_student_with_two_parents_gets_the_same_working_password_in_both_messages(self):
         self.load()
         self.a.post("/api/guardians/send/", {"scope": "all", "dry_run": False}, format="json")

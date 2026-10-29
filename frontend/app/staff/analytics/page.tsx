@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { Pager, useClientPage, usePaged } from "@/components/Pager";
 import Shell from "@/components/Shell";
 import StaffNav from "@/components/StaffNav";
 import { Bar, ErrorNote, Loading, useLoad, Tabs } from "@/components/ui";
@@ -9,9 +10,11 @@ import { plain } from "@/lib/staff";
 /** TCH-06: topic mastery by class. The number and a symbol carry the meaning, colour only helps (ACC-05). */
 function HeatMap({ subject }: { subject: number }) {
   const h = useLoad(() => api<any>(`/analytics/subjects/${subject}/heatmap/`), [subject]);
+  const tp = useClientPage<string>(h.data?.topics, 10, String(subject));
   if (h.loading) return <Loading />;
   if (h.error || !h.data) return <ErrorNote error={h.error} retry={h.reload} />;
   const { topics, classes, cells } = h.data;
+  const first = (tp.page - 1) * tp.pager.size;
   if (!topics.length) return <div className="card"><p className="muted">No published results yet.</p></div>;
   const mark = (v: number | null) => (v === null ? "–" : v >= 70 ? "▲" : v >= 50 ? "●" : "▼");
   const bg = (v: number | null) => (v === null ? "transparent" : `color-mix(in srgb, var(--primary) ${Math.round(v * 0.6)}%, var(--surface))`);
@@ -19,7 +22,8 @@ function HeatMap({ subject }: { subject: number }) {
     <div className="card">
       <p className="muted small">▲ 70% or more (strong) · ● 50 to 69% · ▼ below 50% (reteach)</p>
       <div className="tbl-wrap"><table><thead><tr><th>Topic</th>{classes.map((c: any) => <th key={c.id}>{c.label}</th>)}</tr></thead>
-        <tbody>{topics.map((t: string, i: number) => <tr key={t}><td>{t}</td>{cells[i].map((v: number | null, j: number) => <td key={j} style={{ background: bg(v), color: "var(--text)", fontWeight: 700 }}>{mark(v)} {v === null ? "" : `${Math.round(v)}%`}</td>)}</tr>)}</tbody></table></div>
+        <tbody>{tp.rows.map((t: string, k: number) => { const i = first + k; return ( <tr key={t}><td>{t}</td>{cells[i].map((v: number | null, j: number) => <td key={j} style={{ background: bg(v), color: "var(--text)", fontWeight: 700 }}>{mark(v)} {v === null ? "" : `${Math.round(v)}%`}</td>)}</tr>); })}</tbody></table></div>
+      <Pager {...tp.pager} onSize={undefined} />
     </div>
   );
 }
@@ -27,7 +31,7 @@ function HeatMap({ subject }: { subject: number }) {
 /** TCH-03, TCH-04: students in the teacher's classes with flags, and one student's profile. */
 function Students({ subject }: { subject: number }) {
   const [open, setOpen] = useState<number | null>(null);
-  const list = useLoad(() => api<any[]>(`/analytics/subjects/${subject}/students/`), [subject]);
+  const list = usePaged<any>(`/analytics/subjects/${subject}/students/`, {}, { size: 20 });
   const prof = useLoad(() => (open ? api<any>(`/analytics/subjects/${subject}/students/${open}/`) : Promise.resolve(null)), [subject, open]);
   if (list.loading) return <Loading />;
   if (list.error) return <ErrorNote error={list.error} retry={list.reload} />;
@@ -48,9 +52,10 @@ function Students({ subject }: { subject: number }) {
     );
   }
   return (
-    <div className="card"><div className="tbl-wrap"><table><thead><tr><th>Student</th><th>Class</th><th>Avg %</th><th>Latest</th><th>Taken</th><th>Streak</th><th>Flag</th></tr></thead><tbody>
-      {list.data!.map((s) => <tr key={s.student_id}><td><button className="btn" onClick={() => setOpen(s.student_id)}>{s.name}</button></td><td>{s.class}</td><td>{s.average ?? "–"}</td><td>{s.latest ?? "–"}</td><td>{s.exams_taken}/{s.exams_eligible}</td><td>{s.current_streak}</td>
-        <td>{s.flag === "needs_support" ? "⚠ Support" : s.flag === "top_performer" ? "★ Top" : ""}</td></tr>)}</tbody></table></div></div>
+    <div className="card"><div className="tbl-wrap paged" ref={list.top} aria-busy={list.busy || undefined}><table><thead><tr><th>Student</th><th>Class</th><th>Avg %</th><th>Latest</th><th>Taken</th><th>Streak</th><th>Flag</th></tr></thead><tbody>
+      {list.rows.map((s) => <tr key={s.student_id}><td><button className="btn" onClick={() => setOpen(s.student_id)}>{s.name}</button></td><td>{s.class}</td><td>{s.average ?? "–"}</td><td>{s.latest ?? "–"}</td><td>{s.exams_taken}/{s.exams_eligible}</td><td>{s.current_streak}</td>
+        <td>{s.flag === "needs_support" ? "⚠ Support" : s.flag === "top_performer" ? "★ Top" : ""}</td></tr>)}</tbody></table></div>
+      <Pager {...list.pager} /></div>
   );
 }
 
@@ -60,6 +65,8 @@ function QuestionAnalysis({ subject }: { subject: number }) {
   const [id, setId] = useState<number | null>(null);
   const q = useLoad(() => (id ? api<any>(`/analytics/exams/${id}/questions/`) : Promise.resolve(null)), [id]);
   const integ = useLoad(() => (id ? api<any>(`/analytics/exams/${id}/integrity/`) : Promise.resolve(null)), [id]);
+  const qp = useClientPage<any>(q.data?.questions, 15, String(id));
+  const ip = useClientPage<any>(integ.data?.flags, 10, String(id));
   const done = (exams.data || []).filter((e) => e.subject === subject && e.status === "published");
   return (
     <div className="card">
@@ -69,11 +76,12 @@ function QuestionAnalysis({ subject }: { subject: number }) {
       {q.data && (
         <>
           <p className="muted">{q.data.students} students</p>
-          <div className="tbl-wrap"><table><thead><tr><th>#</th><th>Question</th><th>Topic</th><th>% correct</th><th>Difficulty (marked → observed)</th><th>Most chosen wrong answer</th></tr></thead><tbody>
-            {q.data.questions.map((r: any) => <tr key={r.exam_question_id}><td>{r.number}</td><td>{plain(r.prompt).slice(0, 70)}{r.voided ? " (voided)" : ""}</td><td>{r.topic}</td><td><b>{r.percent_correct ?? "–"}%</b></td><td>{r.marked_difficulty} → {r.observed_difficulty}</td><td>{r.most_chosen_wrong ? `${plain(r.most_chosen_wrong.text)} (${r.most_chosen_wrong.share}%)` : "–"}</td></tr>)}</tbody></table></div>
+          <div className="tbl-wrap" ref={qp.top}><table><thead><tr><th>#</th><th>Question</th><th>Topic</th><th>% correct</th><th>Difficulty (marked → observed)</th><th>Most chosen wrong answer</th></tr></thead><tbody>
+            {qp.rows.map((r: any) => <tr key={r.exam_question_id}><td>{r.number}</td><td>{plain(r.prompt).slice(0, 70)}{r.voided ? " (voided)" : ""}</td><td>{r.topic}</td><td><b>{r.percent_correct ?? "–"}%</b></td><td>{r.marked_difficulty} → {r.observed_difficulty}</td><td>{r.most_chosen_wrong ? `${plain(r.most_chosen_wrong.text)} (${r.most_chosen_wrong.share}%)` : "–"}</td></tr>)}</tbody></table></div>
+          <Pager {...qp.pager} />
         </>
       )}
-      {integ.data && integ.data.flags.length > 0 && <><h3>Left the exam screen</h3><p className="muted small">{integ.data.note}</p><ul className="list">{integ.data.flags.map((f: any) => <li key={f.student_id}>{f.name}: {f.times_left_screen} time(s)</li>)}</ul></>}
+      {integ.data && integ.data.flags.length > 0 && <><h3>Left the exam screen</h3><p className="muted small">{integ.data.note}</p><ul className="list" ref={ip.top}>{ip.rows.map((f: any) => <li key={f.student_id}>{f.name}: {f.times_left_screen} time(s)</li>)}</ul><Pager {...ip.pager} onSize={undefined} /></>}
     </div>
   );
 }

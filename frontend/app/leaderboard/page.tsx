@@ -1,8 +1,8 @@
 "use client";
 import { useState } from "react";
+import { Pager, usePaged } from "@/components/Pager";
 import Shell from "@/components/Shell";
-import { ErrorNote, Loading, useLoad } from "@/components/ui";
-import { api } from "@/lib/api";
+import { ErrorNote, Loading } from "@/components/ui";
 import { AVATAR_EMOJI } from "@/lib/emoji";
 import { useSession } from "@/lib/session";
 
@@ -10,7 +10,8 @@ import { useSession } from "@/lib/session";
 export default function Leaderboard() {
   const { t } = useSession();
   const [period, setPeriod] = useState<"weekly" | "all">("weekly");
-  const { data, error, loading, reload } = useLoad(() => api<any>(`/gamification/leaderboard/?period=${period}`), [period]);
+  const pg = usePaged<any>("/gamification/leaderboard/", { period }, { size: 10, field: "entries" });
+  const { data, error, loading, reload } = pg;
   return (
     <Shell title={t("leaderboard")}>
       <div className="chips" role="group">
@@ -20,15 +21,16 @@ export default function Leaderboard() {
         <>
           <p className="muted small">{t("leaderboard_note")}</p>
           {data.you.message && <p className="hint">{data.you.message}</p>}
-          <ol className="list card">
-            {data.entries.map((e: any) => (
+          <ol className="list card paged" ref={pg.top as any} aria-busy={pg.busy || undefined}>
+            {pg.rows.map((e: any) => (
               <li key={e.rank + e.name} className="row" style={e.is_me ? { background: "var(--soft)", borderRadius: 8, padding: ".7rem" } : undefined}>
                 <b style={{ width: 32 }}>{e.rank <= 3 ? ["🥇", "🥈", "🥉"][e.rank - 1] : e.rank}</b><span aria-hidden>{AVATAR_EMOJI[e.avatar]}</span>
                 <span className="grow">{e.name}{e.is_me ? ` (${t("you")})` : ""}<br /><span className="small muted">{t("level_n", { n: e.level })}</span></span><b>{e.xp} XP</b>
               </li>
             ))}
-            {!data.entries.length && <li className="muted">{t("no_xp")}</li>}
+            {!pg.rows.length && <li className="muted">{t("no_xp")}</li>}
           </ol>
+          <Pager {...pg.pager} onSize={undefined} />
         </>
       )}
     </Shell>

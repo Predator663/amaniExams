@@ -1,5 +1,6 @@
 
 from django.conf import settings
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -10,7 +11,8 @@ from core.models import audit
 from exams.models import Attempt, Exam
 from . import geocode, services
 from . import geo
-from .models import LiveLocation, ProximityAlert
+from accounts.models import User
+from .models import IntegrityFlag, LiveLocation, ProximityAlert, StudentRelation
 
 
 @api_view(["GET"])
@@ -42,8 +44,11 @@ def report_location(request, attempt_id):
             return None
     sensors = request.data.get("sensors")
     motion_moving = isinstance(sensors, dict) and sensors.get("motion") == "moving"
-    services.ingest(attempt, fix, speed=num("speed"), heading=num("heading"), sensors=sensors, motion_moving=motion_moving)
-    return Response({"ok": True})
+    services.ingest(attempt, fix, speed=num("speed"), heading=num("heading"), sensors=sensors, motion_moving=motion_moving, **services.client_info(request))
+    lock = services.locking_alert(attempt.exam_id, request.user.pk)
+    from notifications.models import AdminMessage
+    unseen = AdminMessage.objects.filter(recipient=request.user, dismissed_at__isnull=True).count()  # the exam screen then shows the banner at once
+    return Response({"ok": True, "locked": bool(lock), "messages": unseen})
 
 
 def _row(ll, now):
@@ -62,7 +67,9 @@ def _alert(al, now):
     return {"lat": pos[0] if pos else None, "lng": pos[1] if pos else None, "id": al.pk, "a": {"id": al.a_id, "name": services.name_of(al.a)}, "b": {"id": al.b_id, "name": services.name_of(al.b)},
             "distance_m": round(al.last_distance, 1), "min_distance_m": round(al.min_distance, 1), "confidence": al.confidence,
             "first_seen": al.first_seen.isoformat(), "last_seen": al.last_seen.isoformat(), "active": al.active,
-            "acknowledged": bool(al.acknowledged_at), "duration_s": int((al.last_seen - al.first_seen).total_seconds())}
+            "acknowledged": bool(al.acknowledged_at), "duration_s": int((al.last_seen - al.first_seen).total_seconds()),
+            "locked": bool(al.locked and not al.unlocked_at), "locked_at": al.locked_at.isoformat() if al.locked_at else None,
+            "unlocked_at": al.unlocked_at.isoformat() if al.unlocked_at else None}
 
 
 @api_view(["GET"])
@@ -84,9 +91,14 @@ def exam_board(request, exam_id):
         if ll is not None:
             students.append(_row(ll, now))
     alerts = ProximityAlert.objects.filter(exam=exam).select_related("a", "b").order_by("-active", "-last_seen")[:60]
+    rank = {"high": 0, "warning": 1, "info": 2}
+    flags = sorted(IntegrityFlag.objects.filter(exam=exam).select_related("student", "attempt")[:200],
+                   key=lambda f: (f.acknowledged_at is not None, rank.get(f.severity, 3), -f.last_seen.timestamp()))
     return Response({"server_time": now.isoformat(), "exam": {"id": exam.pk, "title": exam.title, "status": exam.status},
-                     "alert_meters": services.threshold(), "writing": len(attempts), "students": students, "no_signal": silent,
-                     "alerts": [_alert(a, now) for a in alerts], "enabled": services.enabled()})
+                     "alert_meters": services.threshold(), "lock_enabled": services.lock_enabled(), "writing": len(attempts),
+                     "students": students, "no_signal": silent, "alerts": [_alert(a, now) for a in alerts], "flags": [_flag(f) for f in flags],
+                     "links": services.relation_links(students, services.threshold()),
+                     "enabled": services.enabled()})
 
 
 @api_view(["POST"])
@@ -99,6 +111,85 @@ def ack_alert(request, alert_id):
         audit(request.user, "proximity_alert_reviewed", f"alert {al.pk}", exam=al.exam_id, students=[al.a_id, al.b_id],
               min_distance_m=round(al.min_distance, 1))
     return Response({"ok": True})
+
+
+def _relation(r):
+    return {"id": r.pk, "kind": r.kind, "label": r.get_kind_display(), "note": r.note,
+            "a": {"id": r.a_id, "name": services.name_of(r.a), "index": r.a.index_number, "class": str(r.a.school_class) if r.a.school_class_id else ""},
+            "b": {"id": r.b_id, "name": services.name_of(r.b), "index": r.b.index_number, "class": str(r.b.school_class) if r.b.school_class_id else ""},
+            "created_at": r.created_at.isoformat()}
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAdminRole])
+def relations(request):
+    """GET: the related pairs (?q= searches names). POST {students: [ids], kind, note}: mark every pair among 2 to 8 students
+    (twins, triplets, a household) as related, so they are shown with a line instead of being alerted or locked."""
+    if request.method == "GET":
+        qs = StudentRelation.objects.select_related("a", "b", "a__school_class", "b__school_class")
+        q = (request.query_params.get("q") or "").strip()
+        if q:
+            f = lambda p: Q(**{p + "first_name__icontains": q}) | Q(**{p + "last_name__icontains": q}) | Q(**{p + "index_number__icontains": q})
+            qs = qs.filter(f("a__") | f("b__"))
+        return Response({"results": [_relation(r) for r in qs[:300]]})
+    ids = request.data.get("students")
+    kind = request.data.get("kind")
+    note = str(request.data.get("note") or "").strip()[:120]
+    if not isinstance(ids, list) or not 2 <= len(set(map(str, ids))) <= 8:
+        return Response({"detail": "Choose from 2 to 8 students."}, status=400)
+    try:
+        ids = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        return Response({"detail": "Choose students from the list."}, status=400)
+    if kind not in dict(StudentRelation.KINDS):
+        return Response({"detail": "Choose the kind of relation: twins, same house or same room."}, status=400)
+    found = set(User.objects.filter(pk__in=ids, role=User.Role.STUDENT, is_archived=False).values_list("pk", flat=True))
+    if found != set(ids):
+        return Response({"detail": "Only current students can be marked as related."}, status=400)
+    rels = services.mark_related(request.user, ids, kind, note)
+    rels = StudentRelation.objects.filter(pk__in=[r.pk for r in rels]).select_related("a", "b", "a__school_class", "b__school_class")
+    return Response({"ok": True, "results": [_relation(r) for r in rels]}, status=201)
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAdminRole])
+def relation_delete(request, relation_id):
+    r = get_object_or_404(StudentRelation, pk=relation_id)
+    audit(request.user, "student_relation_removed", f"relation {r.pk}", students=[r.a_id, r.b_id], kind=r.kind)
+    r.delete()
+    return Response({"ok": True})
+
+
+def _flag(f):
+    return {"id": f.pk, "student": {"id": f.student_id, "name": services.name_of(f.student), "index": f.student.index_number},
+            "kind": f.kind, "label": f.get_kind_display(), "severity": f.severity, "count": f.count, "text": services.flag_text(f),
+            "meaning": services.FLAG_TEXT.get(f.kind, ""), "first_seen": f.first_seen.isoformat(), "last_seen": f.last_seen.isoformat(),
+            "acknowledged": bool(f.acknowledged_at)}
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminRole])
+def ack_flag(request, flag_id):
+    """The administrator has looked at it. A new episode of the same sign shows it again."""
+    f = get_object_or_404(IntegrityFlag.objects.select_related("exam"), pk=flag_id)
+    services.acknowledge_flag(f, request.user)
+    return Response({"ok": True})
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminRole])
+def unlock_alert(request, alert_id):
+    """Let both students of one alert carry on. The exam clock never stopped, so they have lost the time they were locked."""
+    al = get_object_or_404(ProximityAlert.objects.select_related("a", "b", "exam"), pk=alert_id)
+    services.unlock(al, request.user)
+    return Response({"ok": True})
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminRole])
+def unlock_exam(request, exam_id):
+    exam = get_object_or_404(Exam, pk=exam_id)
+    return Response({"ok": True, "unlocked": services.unlock_all(exam.pk, request.user)})
 
 
 @api_view(["GET"])

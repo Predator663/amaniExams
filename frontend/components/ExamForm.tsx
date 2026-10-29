@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import ExamBuilder from "./ExamBuilder";
 import { ErrorNote, Loading, useLoad } from "./ui";
 import { api, downloadFile } from "@/lib/api";
-import { eatDate } from "@/lib/clock";
+import { DATETIME, eatDate } from "@/lib/clock";
 import { errorLines, fromIso, plain, toIso } from "@/lib/staff";
 import { useSession } from "@/lib/session";
 
@@ -87,6 +87,7 @@ export default function ExamForm({ id, onClose }: { id: number | null; onClose: 
     <div className="examform">
       <div className="row"><button className="btn" onClick={onClose}>← Back to list</button><span className="pill">{cid ? `#${cid}` : "New"} · {status}</span></div>
       {!editable && <p className="hint">A live or finished exam cannot be edited.</p>}
+      {e?.submitted_at && <p className="hint">📨 Submitted by <b>{e.submitted_by_name || "a teacher"}</b> on {eatDate(e.submitted_at, DATETIME, lang)}{status === "draft" ? " · waiting to be scheduled" : ""}</p>}
       <div className="card">
         <label className="field"><span>Exam title</span><input className="input" value={f.title} disabled={!editable} onChange={(ev) => up({ title: ev.target.value })} /></label>
         <div className="grid2">

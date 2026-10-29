@@ -28,6 +28,10 @@ MAX_ROWS = 3000
 PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # no 0/o, 1/l/i, so it can be read from an SMS
 MAX_ATTEMPTS = 3
 LEASE_MINUTES = 10
+NOTE_MAX = 160  # the optional custom line an administrator may add to every message
+_GSM_BASIC = set("@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà")
+_GSM_EXT = set("^{}\\[~]|€")
+_PUNCT = {"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "\u2013": "-", "\u2014": "-", "\u2026": "...", "\u00a0": " "}
 
 
 # ------------------------------------------------------------------ reading the file
@@ -158,13 +162,30 @@ def commit_rows(clean, user):
     return {"parents_created": created, "parents_updated": updated, "links_created": links}
 
 
+# ------------------------------------------------------------------ the optional custom line
+def clean_note(v):
+    """The administrator's optional extra line: one line of plain text. Curly quotes and dashes (what phones and Word type) become
+    plain ones so the SMS stays cheap, control characters and line breaks become spaces, extra spaces are squeezed."""
+    v = "".join(_PUNCT.get(c, c) for c in str(v or ""))
+    return re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f<>]", " ", v)).strip()
+
+
+def sms_parts(text):
+    """(number of SMS the text will use, True if it has characters outside the cheap GSM alphabet, e.g. emoji)."""
+    if all(c in _GSM_BASIC or c in _GSM_EXT for c in text):
+        n = sum(2 if c in _GSM_EXT else 1 for c in text)
+        return (1 if n <= 160 else -(-n // 153)), False
+    n = len(text.encode("utf-16-le")) // 2
+    return (1 if n <= 70 else -(-n // 67)), True
+
+
 # ------------------------------------------------------------------ the message
 def new_password():
     return "".join(secrets.choice(PASSWORD_ALPHABET) for _ in range(8))
 
 
-def build_body(lang, cfg, pairs):
-    """pairs = [(student display name, username, password)]. Plain characters only, to keep it cheap (GSM-7)."""
+def build_body(lang, cfg, pairs, note=""):
+    """pairs = [(student display name, username, password)]; note = the optional custom line. Plain characters only, to keep it cheap (GSM-7)."""
     url = (cfg.public_url or "").strip() or "the school website"
     school = "Amani Girls"
     if lang == "en":
@@ -175,7 +196,19 @@ def build_body(lang, cfg, pairs):
         lines = [f"{school}: taarifa za kuingia kwenye mitihani. Fungua {url}"]
         lines += [f"{n}: jina {u}, nenosiri {p}" for n, u, p in pairs]
         lines.append("Weka nenosiri jipya ukiingia mara ya kwanza. Usimpe mtu.")
+    if note:
+        lines.append(note)  # the administrator's own line goes last, after the security reminder
     return "\n".join(lines)
+
+
+def preview(items, cfg, note=""):
+    """What a message will look like (first parent in the list, with a placeholder instead of a real password), and how many SMS it uses."""
+    if not items:
+        return {"text": "", "parts": 0, "unicode": False}
+    g, kids = items[0]
+    text = build_body(g.language, cfg, [(_display(s), s.username, "xxxxxxxx") for s in kids], note)
+    parts, uni = sms_parts(text)
+    return {"text": text, "parts": parts, "unicode": uni}
 
 
 def _display(u):
@@ -217,7 +250,7 @@ def plan_send(scope="all", class_id=None, guardian_ids=None, resend=False):
 
 
 @transaction.atomic
-def queue_send(items, user):
+def queue_send(items, user, note=""):
     """Give each listed student a fresh random password and queue ONE message per parent."""
     cfg = SmsConfig.load()
     jobs, passwords = 0, {}  # a student with two parents gets ONE password, so both messages work
@@ -233,7 +266,7 @@ def queue_send(items, user):
             pairs.append((_display(s), s.username, passwords[s.pk]))
         SmsJob.objects.create(
             guardian=g, students=[s.pk for s in kids], to_enc=g.phone_enc,
-            body_enc=crypto.encrypt(build_body(g.language, cfg, pairs)),
+            body_enc=crypto.encrypt(build_body(g.language, cfg, pairs, note)), note=note,
             summary=("Login details for " + ", ".join(p[0] for p in pairs))[:200], created_by=user)
         jobs += 1
     return jobs
@@ -256,7 +289,7 @@ def requeue(job, user=None):
             s.save(update_fields=["password", "must_change_password"])
             Token.objects.filter(user=s).delete()
             pairs.append((_display(s), s.username, pw))
-        job.body_enc = crypto.encrypt(build_body(job.guardian.language, cfg, pairs))
+        job.body_enc = crypto.encrypt(build_body(job.guardian.language, cfg, pairs, job.note))
     job.status, job.attempts, job.error, job.leased_until, job.device = SmsJob.QUEUED, 0, "", None, None
     job.save()
     return True

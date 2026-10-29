@@ -3,12 +3,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ReactNode, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useMessages } from "@/lib/messages";
 import { useSession } from "@/lib/session";
 import type { ExamCard } from "@/lib/types";
 import A11yPanel from "./A11yPanel";
 import Footer from "./Footer";
 import Icon from "./Icon";
 import Logo from "./Logo";
+import MessageBanner from "./MessageBanner";
 import { Dropdown, Loading, Modal } from "./ui";
 
 /** HOME-04: during an exam window every page shows how many students are online (a number, never names, BR-08). */
@@ -60,6 +62,7 @@ export default function Shell({ children, bare, title }: { children: ReactNode; 
   const admin = user?.role === "admin" || user?.role === "super_admin";
   const online = useOnline(isStudent);
   const unread = useUnread(!!user);
+  const msgs = useMessages(!!user);
   const focus = !!bare && !path.startsWith("/staff");  // exam, first password, demo: no menus, nothing to distract
   const side = !!user && !focus;
 
@@ -107,26 +110,29 @@ export default function Shell({ children, bare, title }: { children: ReactNode; 
       { href: "/practice/", icon: "pencil", label: t("nav_practice") }, { href: "/badges/", icon: "medal", label: t("nav_badges") },
       { href: "/leaderboard/", icon: "trophy", label: t("leaderboard") }, { href: "/progress/", icon: "trend", label: t("my_analytics") } ] },
     { title: t("nav_more"), items: [
-      { href: "/notifications/", icon: "bell", label: t("notifications") }, { href: "/settings/", icon: "sliders", label: t("nav_settings") },
+      { href: "/notifications/", icon: "bell", label: t("notifications") }, { href: "/messages/", icon: "mail", label: t("messages") },
+      { href: "/settings/", icon: "sliders", label: t("nav_settings") },
       { href: "/install/", icon: "download", label: t("install_app") } ] },
   ];
   const staff: Group[] = [
     { title: "Teaching", items: [
       { href: "/staff/", icon: "home", label: "Overview" }, { href: "/staff/questions/", icon: "file", label: "Questions" }, { href: "/staff/exams/", icon: "calendar", label: "Exams" },
-      { href: "/staff/monitor/", icon: "activity", label: "Live monitor" }, { href: "/staff/analytics/", icon: "chart", label: "Analytics" } ] },
+      { href: "/staff/monitor/", icon: "activity", label: "Live monitor" }, { href: "/staff/analytics/", icon: "chart", label: "Analytics" },
+      ...(admin ? [] : [{ href: "/messages/", icon: "mail", label: "Messages" }]) ] },
     ...(admin ? [{ title: "Administration", items: [
-      { href: "/staff/people/", icon: "users", label: "People" }, { href: "/staff/guardians/", icon: "phone", label: "Parents" }, { href: "/staff/school/", icon: "building", label: "School analytics" },
+      { href: "/staff/people/", icon: "users", label: "People" }, { href: "/staff/guardians/", icon: "phone", label: "Parents" }, { href: "/staff/messages/", icon: "mail", label: "Messages" }, { href: "/staff/school/", icon: "building", label: "School analytics" },
       { href: "/staff/audit/", icon: "shield", label: "Audit log" }, { href: "/staff/settings/", icon: "sliders", label: "Settings" } ] }] : []),
   ];
   const groups = isStudent ? student : staff;
   const active = (h: string) => (h === "/" ? path === "/" : h === "/staff/" ? path === "/staff/" || path === "/staff" : path.startsWith(h.replace(/\/$/, "")));
-  const bottom = student[0].items.slice(0, 4).concat(student[1].items[1]);
+  const bottom = student[0].items.slice(0, 4).concat(student[1].items.find((i) => i.href === "/settings/")!);
   const name = `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.username;
   const initials = (user.first_name || user.last_name ? `${(user.first_name || "")[0] || ""}${(user.last_name || "")[0] || ""}` : user.username.slice(0, 2)).toUpperCase();
   const role = user.role === "student" ? t("role_student") : user.role === "teacher" ? "Teacher" : user.role === "super_admin" ? "Super admin" : "Admin";
 
   return (
     <div className={`app ${side ? "with-side" : "focus"} ${isStudent && side ? "is-student" : ""}`}>
+      <MessageBanner items={msgs.items} onClose={msgs.dismiss} />
       <a href="#main" className="skip">{t("skip_to_content")}</a>
       {side && (
         <>
@@ -143,6 +149,7 @@ export default function Shell({ children, bare, title }: { children: ReactNode; 
                     <Link key={n.href} href={n.href} className={`side-link ${active(n.href) ? "on" : ""}`} aria-current={active(n.href) ? "page" : undefined}>
                       <Icon n={n.icon} /><span>{n.label}</span>
                       {n.href === "/notifications/" && unread > 0 && <b className="side-count">{unread > 9 ? "9+" : unread}</b>}
+                      {n.href === "/messages/" && msgs.unseen > 0 && <b className="side-count">{msgs.unseen > 9 ? "9+" : msgs.unseen}</b>}
                     </Link>
                   ))}
                 </div>

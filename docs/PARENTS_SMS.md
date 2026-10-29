@@ -22,6 +22,9 @@ details to the parent as an SMS from the school phone.
    (`android-sms-sender/`) on the school phone and pair it.
 3. **Parents > Send**: *Check who will get a message*, then *Queue*. Watch the table: queued, sent, delivered, failed.
    *Retry all failed* tries again; *Cancel waiting* stops the rest.
+   Optional: type an **Extra message** (up to 160 characters, e.g. a meeting date). It is added as the last line of every
+   message, after the login details. *Check who will get a message* shows an example of the text and how many SMS it uses.
+   Leave it empty to send only the login details. Curly quotes and dashes are made plain; emoji make each SMS shorter and dearer.
 
 ## Rules the system follows
 - One message per parent. A student with two parents gets ONE password and both messages carry it.

@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { Pager, usePaged } from "@/components/Pager";
 import Shell from "@/components/Shell";
 import StaffNav from "@/components/StaffNav";
 import { Modal, ErrorNote, Loading, useLoad, Tabs } from "@/components/ui";
@@ -13,7 +14,7 @@ function Errs({ errs, ok }: { errs: string[]; ok?: string }) {
 
 /** ADM-03: create, edit and deactivate teacher accounts; assign subjects and classes. (Super Admin: same for Admin accounts, ADM section 2.) */
 function Staff({ kind }: { kind: "teachers" | "admins" }) {
-  const list = useLoad(() => api<any[]>(`/${kind}/`), [kind]);
+  const list = usePaged<any>(`/${kind}/`, {}, { size: 10 });
   const subjects = useLoad(() => api<any[]>("/subjects/")), classes = useLoad(() => api<any[]>("/classes/"));
   const [f, setF] = useState({ username: "", first_name: "", last_name: "", email: "", password: "" });
   const [errs, setErrs] = useState<string[]>([]), [ok, setOk] = useState(""), [open, setOpen] = useState<number | null>(null);
@@ -33,7 +34,7 @@ function Staff({ kind }: { kind: "teachers" | "admins" }) {
         <Errs errs={errs} ok={ok} />
         <button className="btn primary" disabled={!f.username || !f.first_name || !f.password} onClick={() => run(() => api(`/${kind}/`, { body: f }), `${label} account created.`, () => setF({ username: "", first_name: "", last_name: "", email: "", password: "" }))}>Create account</button>
       </div>
-      {list.loading ? <Loading /> : list.error ? <ErrorNote error={list.error} retry={list.reload} /> : list.data!.map((t) => (
+      {list.loading ? <Loading /> : list.error ? <ErrorNote error={list.error} retry={list.reload} /> : <><div ref={list.top} className="paged" aria-busy={list.busy || undefined}>{list.rows.map((t) => (
         <div key={t.id} className={`card ${t.is_active ? "" : "unread"}`}>
           <div className="row"><span className="grow"><b>{t.first_name} {t.last_name}</b> <span className="muted small">@{t.username}</span>{!t.is_active && <span className="pill">inactive</span>}</span>
             {kind === "teachers" && <button className="btn" onClick={() => setOpen(open === t.id ? null : t.id)}>{open === t.id ? "Close" : "Subjects & classes"}</button>}</div>
@@ -54,7 +55,7 @@ function Staff({ kind }: { kind: "teachers" | "admins" }) {
             </div>
           )}
         </div>
-      ))}
+      ))}</div><Pager {...list.pager} /></>}
     </>
   );
 }
@@ -65,13 +66,13 @@ function Students() {
   const superAdmin = user?.role === "super_admin";
   const classes = useLoad(() => api<any[]>("/classes/"));
   const [f, setF] = useState({ q: "", class: "", archived: "0", active: "" });
-  const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
-  const list = useLoad(() => api<any[]>(`/students/?${qs}`), [qs]);
+  const list = usePaged<any>("/students/", f, { size: 20 });
   const [sel, setSel] = useState<number[]>([]), [edit, setEdit] = useState<any>(null), [add, setAdd] = useState(false), [bulkClass, setBulkClass] = useState("");
   const [errs, setErrs] = useState<string[]>([]), [ok, setOk] = useState("");
   const run = async (fn: () => Promise<any>, msg: string, after?: () => void) => { setErrs([]); setOk(""); try { await fn(); setOk(msg); list.reload(); setSel([]); after?.(); } catch (e: any) { setErrs(errorLines(e.data, e.message)); } };
   const bulk = (action: string, extra: any = {}, msg = "Done.") => run(() => api("/students/bulk-action/", { body: { ids: sel, action, ...extra } }), msg);
-  const rows = list.data || [];
+  const rows = list.rows;
+  const allOnPage = rows.length > 0 && rows.every((r) => sel.includes(r.id));
   const archived = f.archived === "1";
   return (
     <>
@@ -96,10 +97,11 @@ function Students() {
             <button className="btn" onClick={() => confirm("Mark the selected students as graduated?") && bulk("graduate", {}, "Graduated.")}>Graduate</button></div></div>
       )}
       {list.loading ? <Loading /> : list.error ? <ErrorNote error={list.error} retry={list.reload} /> : (
-        <div className="card"><p className="muted small">{rows.length} student(s)</p>
-          <div className="tbl-wrap"><table><thead><tr><th>{!archived && <input type="checkbox" aria-label="Select all" checked={sel.length === rows.length && rows.length > 0} onChange={(e) => setSel(e.target.checked ? rows.map((r) => r.id) : [])} />}</th><th>Name</th><th>Username</th><th>Index no.</th><th>Class</th><th>Status</th><th /></tr></thead>
+        <div className="card"><p className="muted small">{list.count} student(s)</p>
+          <div className="tbl-wrap paged" ref={list.top} aria-busy={list.busy || undefined}><table><thead><tr><th>{!archived && <input type="checkbox" aria-label="Select all" checked={allOnPage} onChange={(e) => setSel(e.target.checked ? [...new Set([...sel, ...rows.map((r) => r.id)])] : sel.filter((id) => !rows.some((r) => r.id === id)))} />}</th><th>Name</th><th>Username</th><th>Index no.</th><th>Class</th><th>Status</th><th /></tr></thead>
             <tbody>{rows.map((s) => <tr key={s.id}><td>{!archived && <input type="checkbox" aria-label={`Select ${s.first_name}`} checked={sel.includes(s.id)} onChange={(e) => setSel(e.target.checked ? [...sel, s.id] : sel.filter((x) => x !== s.id))} />}</td>
-              <td>{s.first_name} {s.last_name}</td><td>{s.username}</td><td>{s.index_number}</td><td>{s.school_class_name || "—"}</td><td>{s.is_archived ? "archived" : s.graduated ? "graduated" : s.is_active ? "active" : "inactive"}</td><td><button className="btn" onClick={() => setEdit(s)}>Open</button></td></tr>)}</tbody></table></div></div>
+              <td>{s.first_name} {s.last_name}</td><td>{s.username}</td><td>{s.index_number}</td><td>{s.school_class_name || "—"}</td><td>{s.is_archived ? "archived" : s.graduated ? "graduated" : s.is_active ? "active" : "inactive"}</td><td><button className="btn" onClick={() => setEdit(s)}>Open</button></td></tr>)}</tbody></table></div>
+          <Pager {...list.pager} /></div>
       )}
       {add && <StudentForm classes={classes.data || []} onClose={() => setAdd(false)} onSaved={(m) => { setAdd(false); setOk(m); list.reload(); }} />}
       {edit && (

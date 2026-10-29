@@ -1,9 +1,11 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import QuestionEditor from "./QuestionEditor";
+import { Pager } from "./Pager";
 import QuestionView from "./QuestionView";
 import { Loading } from "./ui";
 import { api } from "@/lib/api";
+import { eatDate } from "@/lib/clock";
 import { canonicalOrder, groupSections } from "@/lib/sections";
 import { errorLines, plain, qtypeName, QTYPES } from "@/lib/staff";
 import type { Question } from "@/lib/types";
@@ -35,20 +37,6 @@ function QPreview({ q, showKey, n }: { q: Q; showKey: boolean; n?: number }) {
 const Diff = ({ d }: { d: string }) => <span className={`dpill d-${d}`}>{d}</span>;
 
 /* ------------------------------------------------------------------ pagination */
-function Pager({ page, pages, onPage }: { page: number; pages: number; onPage: (p: number) => void }) {
-  if (pages <= 1) return null;
-  const set = new Set([1, pages, page - 1, page, page + 1]);
-  const nums = [...set].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
-  const out: (number | "…")[] = [];
-  nums.forEach((n, i) => { if (i && n - nums[i - 1] > 1) out.push("…"); out.push(n); });
-  return (
-    <nav className="pager" aria-label="Pages">
-      <button className="btn" disabled={page <= 1} onClick={() => onPage(page - 1)} aria-label="Previous page">‹ Prev</button>
-      {out.map((n, i) => n === "…" ? <span key={`e${i}`} className="muted">…</span> : <button key={n} className={`btn pg ${n === page ? "primary" : ""}`} aria-current={n === page ? "page" : undefined} onClick={() => onPage(n)}>{n}</button>)}
-      <button className="btn" disabled={page >= pages} onClick={() => onPage(page + 1)} aria-label="Next page">Next ›</button>
-    </nav>
-  );
-}
 
 /* ------------------------------------------------------------------ question bank picker */
 function Bank({ exam, selIds, onToggle, onAddMany, onCreate }: { exam: any; selIds: Set<number>; onToggle: (q: Q) => void; onAddMany: (qs: Q[]) => void; onCreate: () => void }) {
@@ -121,7 +109,7 @@ function Bank({ exam, selIds, onToggle, onAddMany, onCreate }: { exam: any; selI
           );
         })}
       </div>
-      <Pager page={res?.page || 1} pages={res?.pages || 1} onPage={goto} />
+      <Pager page={res?.page || 1} pages={res?.pages || 1} count={res?.count || 0} size={f.size} onPage={goto} onSize={(n) => set({ size: n })} busy={busy} />
     </div>
   );
 }
@@ -254,11 +242,13 @@ export default function ExamBuilder({ exam, reload, editable, admin, subjectName
     try { const r = await api<any>(`/exams/${exam.id}/paper/`, { body: { question_ids: canonicalOrder(sel).map((q) => q.id), rules: [] } }); setSaved(canonicalOrder(sel).map((q) => q.id)); setOrphans(0); reload(); flash(`Paper saved: ${r.questions} questions, ${r.total_marks} marks.`); return true; }
     catch (e: any) { setErrs(errorLines(e.data, e.message)); return false; }
   }
-  async function save(thenSchedule: boolean) {
+  async function save(thenSchedule: boolean, thenSubmit = false) {
     setBusy(true);
-    if (await savePaper() && thenSchedule) {
-      try { await api(`/exams/${exam.id}/schedule/`, { body: {} }); flash("Exam scheduled. Students can now see it."); reload(); }
-      catch (e: any) { setErrs(errorLines(e.data, e.message)); }
+    if (await savePaper()) {
+      try {
+        if (thenSchedule) { await api(`/exams/${exam.id}/schedule/`, { body: {} }); flash("Exam scheduled. Students can now see it."); reload(); }
+        else if (thenSubmit) { await api(`/exams/${exam.id}/submit/`, { body: {} }); flash("Submitted. The administrators will see it at the top of their exam list."); reload(); }
+      } catch (e: any) { setErrs(errorLines(e.data, e.message)); }
     }
     setBusy(false);
   }
@@ -305,7 +295,7 @@ export default function ExamBuilder({ exam, reload, editable, admin, subjectName
           <div className="card paper-actions">
             <h3>Ready to submit for scheduling?</h3>
             <ul className="checks">{checks.map((c) => <li key={c.label} className={c.ok ? "ok" : "todo"}>{c.ok ? "✓" : "○"} {c.label}</li>)}</ul>
-            {!admin && <p className="muted small">After you save the paper, an administrator sets the date and classes and schedules the exam.</p>}
+            {!admin && <p className="muted small">{exam.submitted_at ? `Submitted on ${eatDate(exam.submitted_at, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}. ` : ""}An administrator sets the date and classes and schedules the exam. Submit the paper so it appears at the top of their list.</p>}
             {errs.length > 0 && <div className="card error" role="alert">{errs.map((e, i) => <p key={i}>⚠ {e}</p>)}</div>}
             {editable && (
               <div className="row">
@@ -313,6 +303,7 @@ export default function ExamBuilder({ exam, reload, editable, admin, subjectName
                 <span className="grow" />
                 <button className="btn" disabled={busy || !sel.length || !dirty} onClick={() => save(false)}>{dirty ? "Save paper" : "Paper saved ✓"}</button>
                 {admin && exam.status === "draft" && <button className="btn primary" disabled={busy || !sel.length} onClick={() => save(true)}>Save &amp; submit for scheduling</button>}
+                {!admin && exam.status === "draft" && <button className="btn primary" disabled={busy || !sel.length} onClick={() => save(false, true)}>{exam.submitted_at && !dirty ? "Resubmit to admin" : "Save & submit to admin"}</button>}
               </div>)}
           </div>
         </>

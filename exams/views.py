@@ -14,6 +14,7 @@ from academics.models import TeacherAssignment
 from accounts.models import User
 from accounts.permissions import IsAdminRole, IsStaffUser, IsStudent
 from core.models import SchoolSettings, audit
+from core.pagination import paginate
 from core.views import online_ids
 from questions.models import Question
 from questions.views import QuestionSerializer
@@ -89,7 +90,7 @@ def student_start(request, exam_id):
         return _err(e)
     if proctoring.enabled():
         proctoring.record_acceptance(request.user, exam)
-        proctoring.ingest(attempt, fix, speed=None, heading=None, sensors=request.data.get("sensors"))
+        proctoring.ingest(attempt, fix, speed=None, heading=None, sensors=request.data.get("sensors"), **proctoring.client_info(request))
     return Response(services.attempt_state(attempt), status=201)
 
 
@@ -116,6 +117,8 @@ def attempt_answer(request, attempt_id):
     except ExamError as e:
         if e.code == "time_over":
             return Response({**services.attempt_state(attempt), "detail": e.message, "code": e.code}, status=409)
+        if e.code == "locked":
+            return Response({"detail": e.message, "code": e.code}, status=423)
         return _err(e)
     return Response(services.attempt_state(Attempt.objects.select_related("exam").get(pk=attempt.pk)))
 
@@ -176,7 +179,8 @@ def my_results(request):
         if services.result_visible(r.attempt, now):
             rows.append({"attempt_id": r.attempt_id, "exam": r.exam.title, "subject": r.exam.subject.name,
                          "percent": r.percent, "grade": r.grade, "date": r.exam.start_at})
-    return Response(sorted(rows, key=lambda x: x["date"], reverse=True))
+    rows.sort(key=lambda x: x["date"], reverse=True)
+    return Response(paginate(request, rows) or rows)
 
 
 @api_view(["GET"])
@@ -239,20 +243,43 @@ def result_review(request, attempt_id):
 
 # =============================================================== staff side
 
+def _person(u):
+    return (f"{u.first_name} {u.last_name}".strip() or u.username) if u else ""
+
+
 class ExamSerializer(serializers.ModelSerializer):
     question_count = serializers.SerializerMethodField()
     total_marks = serializers.ReadOnlyField()
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    class_names = serializers.SerializerMethodField()
+    created_by_name = serializers.SerializerMethodField()
+    submitted_by_name = serializers.SerializerMethodField()
+    awaiting_scheduling = serializers.SerializerMethodField()
 
     class Meta:
         model = Exam
         fields = ["id", "title", "subject", "term", "classes", "students", "start_at", "end_at", "duration_minutes",
                   "pass_mark_percent", "rules_text", "shuffle_questions", "shuffle_options", "allow_skip",
                   "late_entry_minutes", "time_warnings", "partial_marks", "negative_marking", "negative_fraction",
-                  "status", "question_count", "total_marks"]
-        read_only_fields = ["status"]
+                  "status", "question_count", "total_marks", "subject_name", "class_names", "created_at", "created_by",
+                  "created_by_name", "submitted_at", "submitted_by", "submitted_by_name", "awaiting_scheduling"]
+        read_only_fields = ["status", "created_at", "created_by", "submitted_at", "submitted_by"]
 
     def get_question_count(self, o):
         return o.questions.filter(voided=False).count()
+
+    def get_class_names(self, o):
+        return [str(c) for c in o.classes.all()]
+
+    def get_created_by_name(self, o):
+        return _person(o.created_by)
+
+    def get_submitted_by_name(self, o):
+        return _person(o.submitted_by)
+
+    def get_awaiting_scheduling(self, o):
+        """A teacher's draft that an administrator has not scheduled yet."""
+        return o.status == Exam.DRAFT and o.submitted_at is not None
 
     def validate(self, d):
         s, e = d.get("start_at", getattr(self.instance, "start_at", None)), d.get("end_at", getattr(self.instance, "end_at", None))
@@ -278,7 +305,7 @@ class ExamViewSet(viewsets.ModelViewSet):
     serializer_class = ExamSerializer
 
     def get_queryset(self):
-        qs = Exam.objects.all()
+        qs = Exam.objects.select_related("subject", "created_by", "submitted_by").prefetch_related("classes")
         u = self.request.user
         if not u.is_admin_role:
             qs = qs.filter(subject__in=TeacherAssignment.objects.filter(teacher=u).values("subject"))
@@ -338,6 +365,24 @@ class ExamViewSet(viewsets.ModelViewSet):
              "topic": q.payload.get("topic", ""), "difficulty": q.payload.get("difficulty", ""),
              "section": sec.get(q.payload.get("qtype"), "")}
             for q in rows])
+
+    @action(detail=True, methods=["post"])
+    def submit(self, request, pk=None):
+        """A teacher hands the saved paper to the administrators. Records who and when (shown in the admin console).
+        Submitting again after changes simply updates the time."""
+        exam = self.get_object()
+        services.sync_exam(exam)
+        exam.refresh_from_db()
+        if not _teaches(request.user, exam.subject_id):
+            raise PermissionDenied()
+        if exam.status != Exam.DRAFT:
+            raise ValidationError({"detail": "Only a draft can be submitted. This exam is already " + exam.status + "."})
+        if not exam.questions.filter(voided=False).exists():
+            raise ValidationError({"detail": "Save the paper with at least one question before submitting."})
+        exam.submitted_at, exam.submitted_by = timezone.now(), request.user
+        exam.save(update_fields=["submitted_at", "submitted_by"])
+        audit(request.user, "exam.submit", exam.pk, title=exam.title)
+        return Response({"submitted_at": exam.submitted_at, "submitted_by_name": _person(request.user)})
 
     # ---- the question picker: approved questions of this exam's subject, paged and filtered ----
     @action(detail=True, methods=["get"])
@@ -651,3 +696,83 @@ def _monitor_exam(exam, user, now, online, cache=None):
                                    for r in data["in_progress_students"] if not r["online"]]
     data["screen_leave_flags"] = [{"student_id": k, "times_left_screen": v} for k, v in flags.items()]
     return data
+
+
+# =============================================================== staff overview
+
+@api_view(["GET"])
+@permission_classes([IsStaffUser])
+def staff_overview(request):
+    """What is going on right now, in ONE request. Admins see the whole school (plus the audit trail and
+    proximity alerts); teachers see only their own subjects and no student names."""
+    from core.models import AuditLog
+
+    now = timezone.now()
+    u = request.user
+    admin = u.is_admin_role
+    exams = Exam.objects.all()
+    if not admin:
+        exams = exams.filter(subject__in=TeacherAssignment.objects.filter(teacher=u).values("subject"))
+    exams = exams.select_related("subject", "submitted_by", "created_by").prefetch_related("classes")
+
+    for e in exams.filter(status__in=[Exam.SCHEDULED, Exam.LIVE, Exam.CLOSED], start_at__isnull=False,
+                          start_at__lte=now + timedelta(days=1), end_at__gte=now - timedelta(days=2)):
+        services.sync_exam(e, now)  # status always follows the clock, even if cron is not running
+
+    def brief(e, **extra):
+        d = {"id": e.pk, "title": e.title, "subject": e.subject.name, "classes": [str(c) for c in e.classes.all()],
+             "status": e.status, "start_at": e.start_at, "end_at": e.end_at, "duration_minutes": e.duration_minutes}
+        d.update(extra)
+        return d
+
+    live = list(exams.filter(status=Exam.LIVE).order_by("end_at"))
+    counts = {r["exam"]: r for r in Attempt.objects.filter(exam__in=live).values("exam").annotate(
+        writing=Count("id", filter=Q(status=Attempt.IN_PROGRESS)), done=Count("id", filter=~Q(status=Attempt.IN_PROGRESS)))}
+    live_rows = []
+    for e in live:
+        c = counts.get(e.pk, {})
+        live_rows.append(brief(e, writing=c.get("writing", 0), submitted=c.get("done", 0),
+                               eligible=services.eligible_students(e).count(), question_count=e.questions.filter(voided=False).count()))
+
+    upcoming = [brief(e, question_count=e.questions.filter(voided=False).count())
+                for e in exams.filter(status=Exam.SCHEDULED, start_at__gte=now).order_by("start_at")[:6]]
+
+    pending_qs = exams.filter(status=Exam.DRAFT, submitted_at__isnull=False).order_by("-submitted_at")
+    pending = [brief(e, submitted_at=e.submitted_at, submitted_by=_person(e.submitted_by),
+                     question_count=e.questions.filter(voided=False).count()) for e in pending_qs[:8]]
+
+    delay = SchoolSettings.load().result_delay_minutes
+    awaiting = [brief(e, results_at=e.end_at + timedelta(minutes=delay) if e.end_at else None)
+                for e in exams.filter(status=Exam.CLOSED).order_by("-end_at")[:5]]
+    published = [brief(e) for e in exams.filter(status=Exam.PUBLISHED).order_by("-end_at")[:5]]
+
+    attempts = Attempt.objects.filter(exam__in=exams)
+    day_ago = now - timedelta(hours=24)
+    totals = {
+        "live_exams": len(live_rows),
+        "writing_now": sum(r["writing"] for r in live_rows),
+        "submitted_today": attempts.filter(submitted_at__gte=day_ago).count(),
+        "scheduled": exams.filter(status=Exam.SCHEDULED).count(),
+        "awaiting_scheduling": pending_qs.count(),
+        "awaiting_results": exams.filter(status=Exam.CLOSED).count(),
+        "drafts": exams.filter(status=Exam.DRAFT).count(),
+    }
+    out = {"server_time": now, "role": u.role, "totals": totals, "live": live_rows, "upcoming": upcoming,
+           "pending_submissions": pending, "awaiting_results": awaiting, "recently_published": published}
+
+    if admin:
+        online = online_ids()
+        totals["students_online"] = len(online)
+        totals["students_total"] = User.objects.filter(role=User.Role.STUDENT, is_active=True, is_archived=False).count()
+        totals["teachers_total"] = User.objects.filter(role=User.Role.TEACHER, is_active=True, is_archived=False).count()
+        try:
+            from proctoring.models import ProximityAlert
+            totals["proximity_alerts"] = ProximityAlert.objects.filter(active=True, acknowledged_at__isnull=True).count()
+        except Exception:  # the proctoring app is optional for the overview
+            logging.getLogger(__name__).exception("proximity count failed")
+            totals["proximity_alerts"] = 0
+        out["recent_activity"] = [
+            {"id": a.pk, "actor": _person(a.actor) if a.actor_id else "System", "action": a.action, "target": a.target,
+             "at": a.created_at}
+            for a in AuditLog.objects.select_related("actor").order_by("-created_at")[:10]]
+    return Response(out)

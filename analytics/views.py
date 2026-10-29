@@ -21,6 +21,7 @@ from accounts.models import User
 from accounts.permissions import IsAdminRole, IsStaffUser, IsStudent
 from core import grading, reports
 from core.models import SchoolSettings, audit
+from core.pagination import paginate
 from exams import services
 from exams.models import Answer, Attempt, AttemptEvent, Exam, Result
 from exams.views import _result_payload, _visible_result_or_404
@@ -174,8 +175,8 @@ def subject_students(request, subject_id):
                     "practice_sessions": engagement[s.pk]["practice_sessions"],
                     "participation_percent": round(o["exams_taken"] / eligible * 100, 1) if eligible else None})
     order = {"needs_support": 0, "top_performer": 1, None: 2}
-    out.sort(key=lambda x: (order[x["flag"]], x["name"]))
-    return Response(out)
+    out.sort(key=lambda x: (order[x["flag"]], x["name"], x["student_id"]))
+    return Response(paginate(request, out, default=20) or out)
 
 
 @api_view(["GET"])

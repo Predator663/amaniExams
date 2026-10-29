@@ -24,6 +24,8 @@ class SchoolSettings(models.Model):
     rules_text = models.TextField(blank=True, default="")  # default rules shown before an exam
     default_theme = models.CharField(max_length=20, default="light")
     default_language = models.CharField(max_length=2, default="en")
+    proximity_alert_meters = models.FloatField(default=20)  # anti-cheat: two students closer than this raise an alert
+    proximity_lock_enabled = models.BooleanField(default=False)  # anti-cheat: also lock both students' exam screens until an admin unlocks
 
     def save(self, *args, **kwargs):
         self.pk = 1

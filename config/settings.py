@@ -124,6 +124,7 @@ MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", BASE_DIR / "media"))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
+    "DEFAULT_PAGINATION_CLASS": "core.pagination.OptionalPagination",  # pages only when ?page= is sent
     "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.TokenAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -151,7 +152,7 @@ LOCATION_MAX_ACCURACY = float(os.environ.get("LOCATION_MAX_ACCURACY", "100"))   
 # Place names (street, district, country) for administrators. "" switches it off. Point it at your own Nominatim server to keep all data in-house.
 GEOCODER_URL = os.environ.get("GEOCODER_URL", "https://nominatim.openstreetmap.org/reverse")
 GEOCODER_USER_AGENT = os.environ.get("GEOCODER_USER_AGENT", "AmaniExams/1.0 (school exam system; contact: " + os.environ.get("VAPID_CONTACT_EMAIL", "admin@example.com") + ")")
-LEGAL_VERSION = "2026-10-28"  # bump when the Terms or Privacy policy change; shown to students and stored with each acceptance
+LEGAL_VERSION = "2026-10-29b"  # bump when the Terms or Privacy policy change; shown to students and stored with each acceptance
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 VAPID_CONTACT_EMAIL = os.environ.get("VAPID_CONTACT_EMAIL", "admin@example.com")

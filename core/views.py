@@ -13,6 +13,7 @@ from accounts.models import THEMES
 from accounts.permissions import IsAdminRole
 from . import i18n
 from . import grading
+from .pagination import page_params, wants_page
 from .models import AuditLog, SchoolSettings, audit
 
 ONLINE_WINDOW_SECONDS = 90
@@ -58,6 +59,7 @@ def presence(request):
 SETTINGS_FIELDS = [
     "school_name", "result_delay_minutes", "late_entry_minutes", "question_approval_required",
     "show_class_position", "leaderboard_enabled", "grade_scale", "rules_text", "default_theme", "default_language",
+    "proximity_alert_meters", "proximity_lock_enabled",
 ]
 
 
@@ -81,7 +83,19 @@ def clean_settings(data):
                 errors[name] = f"Enter a number from {lo} to {hi}."
             else:
                 clean[name] = v
-    for name in ("question_approval_required", "show_class_position", "leaderboard_enabled"):
+    if "proximity_alert_meters" in data:
+        try:
+            v = float(data["proximity_alert_meters"])
+            if v != v:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors["proximity_alert_meters"] = "Enter a distance in metres."
+        else:
+            if not 1 <= v <= 500:
+                errors["proximity_alert_meters"] = "Enter a distance from 1 to 500 metres."
+            else:
+                clean["proximity_alert_meters"] = round(v, 1)
+    for name in ("question_approval_required", "show_class_position", "leaderboard_enabled", "proximity_lock_enabled"):
         if name in data:
             if isinstance(data[name], bool):
                 clean[name] = data[name]
@@ -174,14 +188,22 @@ def audit_log(request):
             d = None
         if d:
             qs = qs.filter(**{lookup: d})
-    try:
-        limit = max(1, min(int(p.get("limit", 100)), 500))
-        offset = max(0, int(p.get("offset", 0)))
-    except ValueError:
-        limit, offset = 100, 0
     total = qs.count()
+    page = pages = None
+    if wants_page(request):
+        page, limit = page_params(request, 25)
+        pages = max(1, -(-total // limit))
+        page = min(page, pages)
+        offset = (page - 1) * limit
+    else:
+        try:
+            limit = max(1, min(int(p.get("limit", 100)), 500))
+            offset = max(0, int(p.get("offset", 0)))
+        except ValueError:
+            limit, offset = 100, 0
     return Response({
         "count": total,
+        **({"page": page, "pages": pages, "page_size": limit} if page else {}),
         "results": [
             {"at": r.created_at, "actor": getattr(r.actor, "username", None), "action": r.action,
              "target": r.target, "detail": r.detail}

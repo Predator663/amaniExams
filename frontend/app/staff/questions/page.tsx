@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import QuestionEditor from "@/components/QuestionEditor";
+import { Pager, usePaged } from "@/components/Pager";
 import Shell from "@/components/Shell";
 import StaffNav from "@/components/StaffNav";
 import { ErrorNote, Loading, useLoad } from "@/components/ui";
@@ -15,8 +16,7 @@ export default function Questions() {
   const [edit, setEdit] = useState<number | "new" | null>(null);
   const [f, setF] = useState({ subject: "", topic: "", difficulty: "", qtype: "", status: "", q: "" });
   const subjects = useLoad(() => api<any[]>("/subjects/"));
-  const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
-  const list = useLoad(() => api<any[]>(`/questions/?${qs}`), [qs]);
+  const list = usePaged<any>("/questions/", f, { size: 10 });
   const [msg, setMsg] = useState("");
   useEffect(() => { const e = new URLSearchParams(location.search).get("edit"); if (e) setEdit(e === "new" ? "new" : Number(e)); }, []);
   const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
@@ -44,10 +44,11 @@ export default function Questions() {
             </div>
           </div>
           {msg && <p className="no" role="alert">⚠ {msg}</p>}
-          {list.loading ? <Loading /> : list.error ? <ErrorNote error={list.error} retry={list.reload} /> : !list.data?.length ? <div className="card"><p className="muted">No questions match.</p></div> : (
+          {list.loading ? <Loading /> : list.error ? <ErrorNote error={list.error} retry={list.reload} /> : !list.rows.length ? <div className="card"><p className="muted">No questions match.</p></div> : (
             <>
-              <p className="muted small">{list.data.length} question(s)</p>
-              {list.data.map((q) => (
+              <p className="muted small">{list.count} question(s)</p>
+              <div ref={list.top} className="paged" aria-busy={list.busy || undefined}>
+              {list.rows.map((q) => (
                 <div key={q.id} className="card">
                   <p className="small muted">#{q.id} · {subjects.data?.find((s) => s.id === q.subject)?.name} · Form {q.form_level} · {q.topic || "—"} · {q.difficulty} · {qtypeName(q.qtype)} · {q.marks} mark(s)</p>
                   <p>{plain(q.prompt).slice(0, 160) || "(image only)"}</p>
@@ -60,6 +61,8 @@ export default function Questions() {
                   </div>
                 </div>
               ))}
+              </div>
+              <Pager {...list.pager} />
             </>
           )}
         </>

@@ -1,4 +1,5 @@
 "use client";
+import { Pager, useClientPage, usePaged } from "@/components/Pager";
 import Shell from "@/components/Shell";
 import { Bar, ErrorNote, Loading, useLoad } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -9,7 +10,8 @@ import { useSession } from "@/lib/session";
 export default function Badges() {
   const { t } = useSession();
   const b = useLoad(() => api<any[]>("/gamification/badges/"));
-  const xp = useLoad(() => api<any>("/gamification/xp/?limit=15"));
+  const xp = usePaged<any>("/gamification/xp/", {}, { size: 10 });
+  const bp = useClientPage(b.data, 12);
   const me = useLoad(() => api<any>("/gamification/me/"));
   return (
     <Shell title={t("nav_badges")}>
@@ -20,8 +22,9 @@ export default function Badges() {
         </div>
       )}
       {b.loading ? <Loading /> : b.error ? <ErrorNote error={b.error} retry={b.reload} /> : (
-        <div className="grid2">
-          {b.data!.map((x, i) => (
+        <>
+        <div className="grid2" ref={bp.top}>
+          {bp.rows.map((x, i) => (
             <div key={i} className={`badge-tile tier-${x.tier} ${x.earned ? "" : "locked"}`}>
               <span className="em" aria-hidden>{BADGE_EMOJI[x.code] || "🏅"}</span>
               <b>{x.name}</b>{x.subject && <div className="small muted">{x.subject}</div>}
@@ -31,9 +34,11 @@ export default function Badges() {
             </div>
           ))}
         </div>
+        <Pager {...bp.pager} />
+        </>
       )}
       <h2>{t("xp_history")}</h2>
-      {xp.data && <ul className="list card">{xp.data.results.map((e: any, i: number) => <li key={i} className="row"><span className="grow">{e.label}</span><b>+{e.points}</b></li>)}{!xp.data.results.length && <li className="muted">{t("no_xp")}</li>}</ul>}
+      {xp.data && <><ul className="list card paged" ref={xp.top as any} aria-busy={xp.busy || undefined}>{xp.rows.map((e: any, i: number) => <li key={i} className="row"><span className="grow">{e.label}</span><b>+{e.points}</b></li>)}{!xp.rows.length && <li className="muted">{t("no_xp")}</li>}</ul><Pager {...xp.pager} onSize={undefined} /></>}
     </Shell>
   );
 }

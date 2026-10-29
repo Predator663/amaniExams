@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { PagedList } from "@/components/Pager";
 import Shell from "@/components/Shell";
 import StaffNav from "@/components/StaffNav";
 import { ErrorNote, Loading, useLoad, Tabs } from "@/components/ui";
@@ -45,6 +46,13 @@ function School() {
         <label className="field"><span>Default theme</span><select className="input" value={v.default_theme} onChange={(e) => up({ default_theme: e.target.value })}>{THEMES.map((t) => <option key={t}>{t}</option>)}</select></label>
         <label className="field"><span>Default language</span><select className="input" value={v.default_language} onChange={(e) => up({ default_language: e.target.value })}><option value="en">English</option><option value="sw">Kiswahili</option></select></label>
       </div>
+      <h3 style={{ marginTop: "1rem" }}>Anti-cheat: students sitting close together</h3>
+      <div className="grid2">
+        <label className="field"><span>Alert distance (metres)</span><input className="input" type="number" min={1} max={500} step={1} value={v.proximity_alert_meters ?? 20} onChange={(e) => up({ proximity_alert_meters: Number(e.target.value) })} /></label>
+      </div>
+      <p className="muted small">Two students of the same exam closer than this raise an alert in Live monitor → Anti-cheat. Phones indoors are only accurate to about 5–15 m, so very small values can miss real cases.</p>
+      <label className="switch"><input type="checkbox" checked={!!v.proximity_lock_enabled} onChange={(e) => up({ proximity_lock_enabled: e.target.checked })} /> Lock the exam of students who sit closer than this distance</label>
+      <p className="muted small">Both students see a banner telling them to move apart and cannot answer until an administrator unlocks them in Live monitor → Anti-cheat. Their exam timer keeps running. Only precise positions lock a screen; rough ones only alert you. Switching this off releases everyone who is locked.</p>
       <label className="switch"><input type="checkbox" checked={v.leaderboard_enabled} onChange={(e) => up({ leaderboard_enabled: e.target.checked })} /> Class leaderboard (XP only)</label>
       <label className="switch"><input type="checkbox" checked={v.show_class_position} onChange={(e) => up({ show_class_position: e.target.checked })} /> Show class position on results</label>
       <Msg errs={errs} ok={ok} /><button className="btn primary" onClick={save}>Save settings</button>
@@ -123,19 +131,19 @@ function Setup() {
     <>
       <Msg errs={errs} ok="" />
       <div className="card"><h3>Classes</h3>
-        {classes.data?.map((x) => <div key={x.id} className="row"><span className="grow">{x.name} (Form {x.form_level}{x.stream ? `, stream ${x.stream}` : ""})</span><button className="btn danger" onClick={() => confirm(`Delete ${x.name}?`) && run(() => api(`/classes/${x.id}/`, { method: "DELETE" }), classes.reload)}>Delete</button></div>)}
+        <PagedList as="div" className="" items={classes.data || []} size={10} render={(x: any) => <div key={x.id} className="row"><span className="grow">{x.name} (Form {x.form_level}{x.stream ? `, stream ${x.stream}` : ""})</span><button className="btn danger" onClick={() => confirm(`Delete ${x.name}?`) && run(() => api(`/classes/${x.id}/`, { method: "DELETE" }), classes.reload)}>Delete</button></div>} />
         <div className="row" style={{ marginTop: ".6rem" }}><input className="input grow" placeholder="Name, e.g. Form 1A" aria-label="Class name" value={c.name} onChange={(e) => setC({ ...c, name: e.target.value })} />
           <select className="input" style={{ width: 100 }} aria-label="Form" value={c.form_level} onChange={(e) => setC({ ...c, form_level: Number(e.target.value) })}>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>Form {n}</option>)}</select>
           <input className="input" style={{ width: 90 }} placeholder="Stream" aria-label="Stream" value={c.stream} onChange={(e) => setC({ ...c, stream: e.target.value })} />
           <button className="btn primary" disabled={!c.name} onClick={() => run(() => api("/classes/", { body: c }), () => { setC({ name: "", form_level: 1, stream: "" }); classes.reload(); })}>Add</button></div></div>
       <div className="card"><h3>Subjects and practice mode</h3>
-        {subjects.data?.map((x) => <div key={x.id} className="row"><span className="grow">{x.name} <span className="muted small">({x.language === "sw" ? "Kiswahili" : "English"})</span></span>
-          <label className="switch"><input type="checkbox" checked={x.practice_enabled} onChange={(e) => run(() => api(`/practice/subjects/${x.id}/toggle/`, { body: { enabled: e.target.checked } }), subjects.reload)} /> Practice</label></div>)}
+        <PagedList as="div" className="" items={subjects.data || []} size={10} render={(x: any) => <div key={x.id} className="row"><span className="grow">{x.name} <span className="muted small">({x.language === "sw" ? "Kiswahili" : "English"})</span></span>
+          <label className="switch"><input type="checkbox" checked={x.practice_enabled} onChange={(e) => run(() => api(`/practice/subjects/${x.id}/toggle/`, { body: { enabled: e.target.checked } }), subjects.reload)} /> Practice</label></div>} />
         <div className="row" style={{ marginTop: ".6rem" }}><input className="input grow" placeholder="New subject" aria-label="Subject name" value={sub.name} onChange={(e) => setSub({ ...sub, name: e.target.value })} />
           <select className="input" style={{ width: 130 }} aria-label="Examined language" value={sub.language} onChange={(e) => setSub({ ...sub, language: e.target.value })}><option value="en">English</option><option value="sw">Kiswahili</option></select>
           <button className="btn primary" disabled={!sub.name} onClick={() => run(() => api("/subjects/", { body: sub }), () => { setSub({ name: "", language: "en" }); subjects.reload(); })}>Add</button></div></div>
       <div className="card"><h3>Academic years and terms</h3>
-        {years.data?.map((y) => <p key={y.id} className="small">{y.name}{y.is_current ? " (current)" : ""}: {terms.data?.filter((t) => t.year === y.id).map((t) => t.name).join(", ") || "no terms"}</p>)}
+        <PagedList as="div" className="" items={years.data || []} size={10} render={(y: any) => <p key={y.id} className="small">{y.name}{y.is_current ? " (current)" : ""}: {terms.data?.filter((t) => t.year === y.id).map((t) => t.name).join(", ") || "no terms"}</p>} />
         <div className="row"><input className="input grow" placeholder="Year, e.g. 2026" aria-label="Year" value={yr} onChange={(e) => setYr(e.target.value)} /><button className="btn" disabled={!yr} onClick={() => run(() => api("/academic-years/", { body: { name: yr, is_current: !years.data?.length } }), () => { setYr(""); years.reload(); })}>Add year</button></div>
         <div className="grid2" style={{ marginTop: ".6rem" }}>
           <select className="input" aria-label="Year for the term" value={tm.year} onChange={(e) => setTm({ ...tm, year: e.target.value })}><option value="">Year…</option>{years.data?.map((y) => <option key={y.id} value={y.id}>{y.name}</option>)}</select>

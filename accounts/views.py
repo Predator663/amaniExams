@@ -1,4 +1,5 @@
 import csv
+import logging
 from datetime import timedelta
 
 from django.contrib.auth import authenticate
@@ -74,6 +75,11 @@ class LoginView(APIView):
         Token.objects.filter(user=authed).delete()
         token = Token.objects.create(user=authed)
         audit(authed, "login", authed.pk)
+        try:  # a student logging in again while an exam attempt runs is recorded for the anti-cheat review; it must never block a login
+            from proctoring import services as proctoring
+            proctoring.note_login(authed, ip=proctoring.client_ip(request), ua=request.META.get("HTTP_USER_AGENT", "")[:300])
+        except Exception:
+            logging.getLogger(__name__).exception("could not record the login for the integrity review")
         return Response({"token": token.key, "user": user_payload(authed)})
 
 

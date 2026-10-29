@@ -18,6 +18,22 @@ export type Sensors = { perm?: string; ble?: string; net?: string; motion?: stri
 export type FixError = "denied" | "unavailable" | "timeout" | "unsupported";
 
 /** One position reading, or a short error word. */
+/**
+ * A random code this browser made for itself the first time (kept in its own storage; it is not a phone number, IMEI or anything
+ * from the hardware). It only lets the school see if one student's exam is suddenly sent from another device.
+ */
+export function deviceId(): string {
+  try {
+    let id = localStorage.getItem("amani_device") || "";
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
+      id = typeof crypto.randomUUID === "function" ? crypto.randomUUID()
+        : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+      localStorage.setItem("amani_device", id);
+    }
+    return id;
+  } catch { return ""; }  // storage blocked: the check is simply skipped for this phone
+}
+
 export function getFix(timeoutMs = 15000, maxAgeMs = 0): Promise<Fix> {
   return new Promise((resolve, reject) => {
     if (typeof navigator === "undefined" || !navigator.geolocation) return reject("unsupported" as FixError);
@@ -77,6 +93,9 @@ export function useProctor(attemptId: number | null, every = 6000) {
   const [state, setState] = useState<ProctorState>("starting");
   const [accuracy, setAccuracy] = useState<number | null>(null);
   const [bleOff, setBleOff] = useState(false);
+  const [locked, setLocked] = useState<boolean | null>(null);  // null = the server has not said yet
+  const lastMsgs = useRef(0);
+  const markLocked = useCallback(() => setLocked(true), []);
   const fails = useRef(0), stop = useRef(false), busy = useRef(false);
 
   const tick = useCallback(async () => {
@@ -87,7 +106,10 @@ export function useProctor(attemptId: number | null, every = 6000) {
       fails.current = 0; setState("ok"); setAccuracy(Math.round(fix.accuracy));
       const sensors = await readSensors();
       setBleOff(sensors.ble === "off");
-      try { await api(`/attempts/${attemptId}/location/`, { body: { ...fix, sensors } }); }
+      try { const r = await api<{ locked?: boolean; messages?: number }>(`/attempts/${attemptId}/location/`, { body: { ...fix, sensors, device: deviceId() } }); setLocked(!!r?.locked);
+        const m = r?.messages ?? 0;
+        if (m > lastMsgs.current) window.dispatchEvent(new Event("amani:messages"));  // a message from the school arrived: show its banner now
+        lastMsgs.current = m; }
       catch (e) { if (e instanceof ApiError && e.code === "finished") stop.current = true; /* offline: the next report catches up */ }
     } catch (e) {
       if (e === "denied") { fails.current = 99; setState("denied"); }
@@ -106,5 +128,6 @@ export function useProctor(attemptId: number | null, every = 6000) {
     return () => { stop.current = true; clearInterval(iv); document.removeEventListener("visibilitychange", vis); };
   }, [attemptId, every, tick]);
 
-  return { state, accuracy, bleOff, retry: tick };
+  /** `locked`: an administrator has to unlock this exam because the student sits too close to another one. The next report overrides `markLocked`. */
+  return { state, accuracy, bleOff, locked, markLocked, retry: tick };
 }

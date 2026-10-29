@@ -235,6 +235,8 @@ def attempt_state(attempt, now=None):
     idx = attempt.current_index
     if idx >= len(attempt.order):
         return attempt_state(finalize_attempt(attempt.pk, now), now)
+    from proctoring import services as proctoring  # local import: proctoring imports exams.models
+    state["locked"] = proctoring.is_locked(exam.pk, attempt.student_id)  # near another student: screen locked until an admin unlocks
     eq = ExamQuestion.objects.get(pk=attempt.order[idx], exam=exam)
     state.update(
         finished=False, remaining_seconds=max(0, int((attempt.deadline_at - now).total_seconds())),
@@ -254,6 +256,9 @@ def submit_answer(attempt_id, student, question_id, response, skip=False, now=No
     idx = attempt.current_index
     if idx >= len(attempt.order):
         return attempt
+    from proctoring import services as proctoring
+    if proctoring.is_locked(attempt.exam_id, student.pk):  # the clock keeps running; the app keeps the answer and re-sends after the unlock
+        raise ExamError("Your exam is locked because you are sitting too close to another student. Move away and wait for the invigilator to unlock it.", 423, "locked")
     if question_id != attempt.order[idx]:
         if question_id in attempt.order[:idx]:
             return attempt  # a repeated send from the offline queue: already saved, ignore (BR-05)

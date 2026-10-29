@@ -13,6 +13,7 @@ export type AttemptState = {
   warnings: number[]; status: string; finished: boolean; remaining_seconds?: number; index?: number; can_skip?: boolean;
   question?: Question; time_over?: boolean; results_at?: string; message?: string; results_note?: string;
   tips?: { kind: string; text: string }[];
+  locked?: boolean;  // sitting too close to another student: screen locked until an admin unlocks (clock keeps running)
 };
 export type ExamCard = {
   id: number; title: string; subject: string; start_at: string; end_at: string; duration_minutes: number; question_count: number;

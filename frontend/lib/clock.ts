@@ -12,3 +12,13 @@ export function clock(ms: number) {
 export function eatDate(iso: string, opts: Intl.DateTimeFormatOptions = { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }, lang = "en") {
   return new Intl.DateTimeFormat(lang === "sw" ? "sw-TZ" : "en-GB", { timeZone: "Africa/Dar_es_Salaam", ...opts }).format(new Date(iso));
 }
+/** "5 min ago", "2 h ago", "3 d ago" (falls back to the date after a week). */
+export function ago(iso: string, lang = "en") {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000), sw = lang === "sw";
+  if (s < 60) return sw ? "sasa hivi" : "just now";
+  const m = Math.floor(s / 60); if (m < 60) return sw ? `dak ${m} zilizopita` : `${m} min ago`;
+  const h = Math.floor(m / 60); if (h < 24) return sw ? `saa ${h} zilizopita` : `${h} h ago`;
+  const d = Math.floor(h / 24); if (d < 8) return sw ? `siku ${d} zilizopita` : `${d} d ago`;
+  return eatDate(iso, { day: "numeric", month: "short" }, lang);
+}
+export const DATETIME: Intl.DateTimeFormatOptions = { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" };

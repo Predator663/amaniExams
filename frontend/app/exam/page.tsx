@@ -9,7 +9,7 @@ import { Bar, ErrorNote, Loading, Modal, useLoad, useNow } from "@/components/ui
 import { api, ApiError } from "@/lib/api";
 import { clock, eatDate, makeOffset } from "@/lib/clock";
 import { clearAttempt, dequeue, enqueue, readDraft, readQueue, saveDraft } from "@/lib/offlineQueue";
-import { getFix, readSensors, startMotion, useProctor, type Fix, type FixError, type Sensors } from "@/lib/proctor";
+import { getFix, readSensors, startMotion, useProctor, type Fix, type FixError, type Sensors, deviceId } from "@/lib/proctor";
 import { useSession } from "@/lib/session";
 import type { AttemptState, ExamCard } from "@/lib/types";
 
@@ -47,7 +47,7 @@ function PreExam({ examId }: { examId: number }) {
     try {
       const fix = await getFix(20000);  // a fresh position at the moment she starts proves Location is on
       const sensors = await readSensors();
-      const st = await api<AttemptState>(`/student/exams/${examId}/start/`, { body: { agree_rules: true, accept_legal: true, location: fix, sensors } });
+      const st = await api<AttemptState>(`/student/exams/${examId}/start/`, { body: { agree_rules: true, accept_legal: true, location: fix, sensors, device: deviceId() } });
       location.replace(`/exam/?attempt=${st.attempt_id}`);
     } catch (e: any) {
       setErr(typeof e === "string" ? t(`dev_loc_${e}`) : e.message); setChk((c) => ({ ...c, fix: undefined, err: typeof e === "string" ? e as FixError : c.err, done: true })); setBusy(false);
@@ -130,6 +130,8 @@ function Runner({ attemptId }: { attemptId: number }) {
   const flushing = useRef(false), fired = useRef<Set<number>>(new Set()), finishing = useRef(false);
   const now = useNow(250);
   const proctor = useProctor(st && !st.finished ? attemptId : null);  // sends the position every few seconds while the exam runs
+  const { markLocked } = proctor;
+  const locked = proctor.locked ?? !!st?.locked;  // too close to another student: an administrator must unlock; the clock keeps running
 
   useEffect(() => { setSound(localStorage.getItem("amani_sound") !== "off"); }, []);
 
@@ -164,6 +166,7 @@ function Runner({ attemptId }: { attemptId: number }) {
           dequeue(attemptId, p.qid); setOffline(false); setWaiting(false);
         } catch (e: any) {
           if (!(e instanceof ApiError) || e.isNetwork || e.status >= 500) { setOffline(true); return false; }
+          if (e.code === "locked") { markLocked(); return false; }  // keep the answer on the phone; it is sent again after the unlock
           dequeue(attemptId, p.qid);
           if (e.code === "time_over" && e.data?.finished) { applyState(e.data); return true; }
           if (e.code === "out_of_order" || e.code === "submitted") { await reload(); return true; }
@@ -174,7 +177,7 @@ function Runner({ attemptId }: { attemptId: number }) {
       }
       return true;
     } finally { flushing.current = false; }
-  }, [attemptId, applyState, reload]);
+  }, [attemptId, applyState, reload, markLocked]);
 
   useEffect(() => { (async () => { await flush(); await reload(); })(); }, [flush, reload]);
 
@@ -195,6 +198,13 @@ function Runner({ attemptId }: { attemptId: number }) {
     }
     finishing.current = false;
   }, [attemptId, flush, applyState]);
+
+  // When an administrator unlocks the exam: send any answer that was waiting, then fetch the current question.
+  const wasLocked = useRef(false);
+  useEffect(() => {
+    if (wasLocked.current && !locked) flush().then(() => reload());
+    wasLocked.current = locked;
+  }, [locked, flush, reload]);
 
   // EDAY-05: the countdown is only a display of server time; at zero we ask the server to close the attempt.
   const remainingMs = st && !st.finished ? new Date(st.deadline_at).getTime() - (now + offset) : 0;
@@ -279,6 +289,19 @@ function Runner({ attemptId }: { attemptId: number }) {
         <p>{proctor.state === "denied" ? t("loc_denied_body") : t("loc_lost_body")}</p>
         <p className={`timer ${low ? "low" : ""}`} role="timer" aria-label={t("time_left")}>{clock(remainingMs)}</p>
         <button className="btn primary big" onClick={() => proctor.retry()}>{t("loc_retry")}</button>
+      </div></div>
+    );
+  }
+  if (locked) {
+    // Sitting too close to another student: the question is hidden until an administrator unlocks. The timer keeps running on the server.
+    return (
+      <div className="overlay lock-overlay" role="alertdialog" aria-labelledby="lock-h" aria-describedby="lock-b"><div>
+        <div className="lock-banner" role="alert"><span aria-hidden>⚠️</span> {t("lock_banner")}</div>
+        <span className="big-num" aria-hidden>🔒</span>
+        <h1 id="lock-h">{t("lock_title")}</h1>
+        <p id="lock-b">{t("lock_body")}</p>
+        <p className={`timer ${low ? "low" : ""}`} role="timer" aria-label={t("time_left")}>{clock(remainingMs)}</p>
+        <p className="muted small" role="status">{t("lock_wait")}</p>
       </div></div>
     );
   }

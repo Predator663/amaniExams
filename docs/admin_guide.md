@@ -22,7 +22,7 @@ Admins can do everything a teacher can, for all subjects, plus manage students, 
 2. **Schedule** it: date, start and end times (or duration), pass mark, rules, classes/streams/students. Several exams can form a timetable; each subject is its own exam with its own window.
 3. **During the exam** use the **live monitor**: counts of online, not started, in progress, submitted; names of students who have not started (so staff can help); connection-problem indicators.
    - **Anti-cheat tab (Live monitor):** plan view of every writing student from her phone's position (GPS/Wi-Fi fused by the phone, plus motion). Hover or tap a dot for her name and status; a blue pulse means she is moving; students under 20 m apart turn red, are joined by a line and trigger a sound, a banner and a notification. Use **Locate** to zoom to the pair, check the reading ("precise" or "rough position"), speak to the students, then **Mark reviewed** (recorded in the audit log). An alert is information, not proof (siblings and neighbours can live close). Students without a position, or with Location blocked, are listed under "No location signal".
-   - Place names (street, district, country) in the tooltip and alerts come from `GEOCODER_URL` (default OpenStreetMap Nominatim; set it empty to switch off, or point it at your own Nominatim server). Settings (environment variables): `PROCTORING_ENABLED` (default 1), `PROXIMITY_ALERT_METERS` (default 20), `LOCATION_MAX_ACCURACY` (default 100 m, rougher fixes are not compared). Run `python manage.py purge_locations` daily to delete stored positions of finished exams.
+   - Place names (street, district, country) in the tooltip and alerts come from `GEOCODER_URL` (default OpenStreetMap Nominatim; set it empty to switch off, or point it at your own Nominatim server). The alert distance and the exam lock are set in the app, not in the environment: **Settings → School → Anti-cheat**. Settings (environment variables): `PROCTORING_ENABLED` (default 1), `LOCATION_MAX_ACCURACY` (default 100 m, rougher fixes are not compared). Run `python manage.py purge_locations` daily to delete stored positions of finished exams.
 4. **Special cases:** grant **extra time** (for example after a power cut) or a **retake** for one student. A reason is required and it is written to the audit log. A retake is possible **only** when an admin grants it.
 5. **Faulty question after the exam:** **void** it. All affected results are recalculated before publishing.
 6. **Results publish automatically** at exam end + the result delay. A scheduled job also pays XP, streaks and badges after publishing.
@@ -45,3 +45,42 @@ Admins can do everything a teacher can, for all subjects, plus manage students, 
 
 ## Parents and login messages
 See `PARENTS_SMS.md` for how to upload parents' phone numbers, link them to students and send each child's login details by SMS from the school phone.
+
+
+### Alert distance and locking students who sit too close
+- **Settings → School → Anti-cheat** sets the alert distance in metres (1–500, default 20). It applies at once, also to exams that are running.
+- Tick **Lock the exam of students who sit closer than this distance** to lock both students when a precise position confirms they are too close. They see a banner telling them to move apart and cannot answer. Their timer keeps running, no time is added, and answers they had already typed are kept on the phone and sent after the unlock.
+- Unlock in **Live monitor → Anti-cheat**: **Unlock** next to a pair, or **Unlock all**. Moving apart does not unlock by itself. Unlocking a pair that is still close does not lock them again; if they part and later sit close again, a new alert locks them again.
+- Rough positions (indoors, weak sky view) only raise an alert, they never lock. Switching the option off releases everyone who is locked. Locks and unlocks are written to the audit log (`proximity_lock`, `proximity_unlock`).
+
+
+### Device and position checks (Live monitor → Anti-cheat → "Device and position checks")
+These are signs to look at, never proof. Nothing is blocked or changed automatically; you review each one and press **Mark reviewed**
+(if the same sign happens again it shows up again). *High* and *check* flags page the administrators once; *info* flags do not.
+- **Device changed**: the exam is now sent from another device than at the start. Each browser makes a random code for itself.
+  *High* when the new device is another kind (for example Android → Windows) or on another network; *check* when it looks like the same
+  phone with a new code (browser data cleared, or the installed app and the browser mixed up).
+- **Logged in again** (info): the student logged in again while writing, which ends her first session. Common when a phone restarts;
+  it matters when it comes with *Device changed*.
+- **Position jumped** (high): two precise positions further apart than any vehicle could travel in the time between them.
+- **Position never moves**: exactly the same precise position and accuracy for about a minute. Real GPS always drifts a little.
+- **Impossible accuracy**: ±1 m several times in a row, which no phone reaches indoors.
+- **Typed-in coordinates**: round coordinates (at most 4 decimals) several times in a row.
+Rough positions (poor accuracy) are ignored by the position checks, because switching between Wi-Fi and satellite positioning really does
+jump around. Limits of the web app: it cannot see a fake-location app directly, and a student who clears the browser's data gets a new
+device code. Flags are kept 180 days (`python manage.py purge_locations --flag-days N`). The Privacy policy and Terms were updated and
+`LEGAL_VERSION` is now 2026-10-29, so students accept the new text before their next exam.
+
+
+### Related students (twins, same house, same room)
+- In Live monitor → Anti-cheat, open **Related students** under the map. Pick 2 to 8 students, choose *Twins*, *Same house* or *Same room*, and press **Mark as related**
+  (every pair among them is marked). You can also use **Mark as related…** on an alert; that ends the alert and unlocks them at once.
+- When a related pair is close (inside the alert distance) the map shows a dashed line with the kind written above it, and the side list shows them under
+  "Related students close together". They raise **no alert** and are **never locked**. A third student who sits close to one of them is still alerted.
+- **Remove** a pair in the same panel and alerts apply to them again. Marking and removing are written to the audit log.
+
+### Messages to one account
+- **Messages** (Administration menu) sends a message to 1–30 students or teachers; the Anti-cheat tab has a **Message** button on every alert and check.
+- The person sees it as a banner at the very top of the screen, also during an exam and over the lock screen. One tap closes the banner; the message then stays in
+  her **Messages** tab. She cannot delete it. When you **Delete** it on the Messages page it disappears from her tab (and banner) too. The page shows who has closed the banner.
+- Students in an exam receive the banner within about 6 seconds; other pages check every 20 seconds.

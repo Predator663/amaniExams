@@ -1,11 +1,13 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Icon from "@/components/Icon";
+import RelatedStudents from "@/components/RelatedStudents";
+import SendMessage from "@/components/SendMessage";
 import { api } from "@/lib/api";
 
 /* Anti-cheat tab of the Live monitor (administrators only).
    Draws every writing student on a plan view (metres, north up) from her phone's position, shows who is moving, and raises an
-   alert when two students are closer than the alert distance (20 m by default, set on the server). No map tiles are loaded from
+   alert when two students are closer than the alert distance (set by an administrator in Settings → School, 20 m by default). No map tiles are loaded from
    other websites, so student positions never leave the school's own server. Alerts are information for a person to check,
    they are not proof of cheating (the Terms and Privacy policy say so). */
 
@@ -13,9 +15,13 @@ type Checks = { perm?: string; ble?: string; net?: string; motion?: string };
 type PS = { id: number; name: string; class: string; index: string; lat: number; lng: number; accuracy: number; speed: number | null; heading: number | null;
   moving: boolean; moving_source: string; age_s: number; fresh: boolean; poor: boolean; checks: Checks };
 type PA = { id: number; a: { id: number; name: string }; b: { id: number; name: string }; distance_m: number; min_distance_m: number; confidence: string;
-  first_seen: string; last_seen: string; active: boolean; acknowledged: boolean; duration_s: number; lat?: number | null; lng?: number | null };
+  first_seen: string; last_seen: string; active: boolean; acknowledged: boolean; duration_s: number; lat?: number | null; lng?: number | null; locked?: boolean };
+type PF = { id: number; student: { id: number; name: string; index: string }; kind: string; label: string; severity: "info" | "warning" | "high"; count: number; text: string; meaning: string;
+  first_seen: string; last_seen: string; acknowledged: boolean };
+type PL = { id: number; a: number; b: number; kind: string; label: string; note: string; distance_m: number };
+type PR = { id: number; kind: string; label: string; note: string; a: { id: number; name: string; index: string; class: string }; b: { id: number; name: string; index: string; class: string } };
 type NS = { id: number; name: string; class: string; index: string; last_seen_s: number | null; checks: Checks };
-type PB = { server_time: string; exam: { id: number; title: string; status: string }; alert_meters: number; writing: number; students: PS[]; no_signal: NS[]; alerts: PA[]; enabled: boolean };
+type PB = { server_time: string; exam: { id: number; title: string; status: string }; alert_meters: number; lock_enabled?: boolean; writing: number; students: PS[]; no_signal: NS[]; alerts: PA[]; flags?: PF[]; links?: PL[]; enabled: boolean };
 export type AcExam = { exam_id: number; title: string; status: string; in_progress: number };
 
 const MPD = 111_320;
@@ -67,7 +73,7 @@ const checkText = (c: Checks) => {
 };
 
 /* ------------------------------------------------------------------ the plan view */
-function ProxMap({ students, alerts, threshold, labels, focusReq }: { students: PS[]; alerts: PA[]; threshold: number; labels: boolean; focusReq: { ids: number[]; n: number } | null }) {
+function ProxMap({ students, alerts, links, threshold, labels, focusReq }: { students: PS[]; alerts: PA[]; links: PL[]; threshold: number; labels: boolean; focusReq: { ids: number[]; n: number } | null }) {
   const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 640, h: 440 });
   const [view, setView] = useState({ cx: 0, cy: 0, k: 1 });
@@ -143,12 +149,14 @@ function ProxMap({ students, alerts, threshold, labels, focusReq }: { students: 
   const move = (e: React.PointerEvent) => {
     if (!pts.current.has(e.pointerId)) return;
     pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pts.current.size === 2 && pinch.current) {
+    // setView's updater runs later, after the finger may already have been lifted (which clears drag/pinch), so copy the values first.
+    const pn = pinch.current, dg = drag.current;
+    if (pts.current.size === 2 && pn) {
       const [a, b] = [...pts.current.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y);
-      setAuto(false); setView((v) => ({ ...v, k: Math.min(60, Math.max(0.002, pinch.current!.k * (d / pinch.current!.d))) }));
-    } else if (drag.current) {
-      const dx = e.clientX - drag.current.x, dy = e.clientY - drag.current.y;
-      if (Math.abs(dx) + Math.abs(dy) > 3) { setAuto(false); setView((v) => ({ ...v, cx: drag.current!.cx - dx / v.k, cy: drag.current!.cy - dy / v.k })); }
+      setAuto(false); setView((v) => ({ ...v, k: Math.min(60, Math.max(0.002, pn.k * (d / pn.d))) }));
+    } else if (dg) {
+      const dx = e.clientX - dg.x, dy = e.clientY - dg.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) { setAuto(false); setView((v) => ({ ...v, cx: dg.cx - dx / v.k, cy: dg.cy - dy / v.k })); }
     }
   };
   const up = (e: React.PointerEvent) => { pts.current.delete(e.pointerId); if (pts.current.size < 2) pinch.current = null; if (!pts.current.size) drag.current = null; };
@@ -161,6 +169,8 @@ function ProxMap({ students, alerts, threshold, labels, focusReq }: { students: 
   for (let y = Math.ceil(y0 / step) * step; y <= y1 && gy.length < 60; y += step) gy.push(y);
   const barM = niceStep(90 / view.k), barPx = barM * view.k;
 
+  const relOf = new Map<number, PL>();
+  links.forEach((l) => { relOf.set(l.a, l); relOf.set(l.b, l); });
   const inAlert = new Map<number, PA>();
   alerts.filter((a) => a.active).forEach((a) => { inAlert.set(a.a.id, a); inAlert.set(a.b.id, a); });
   const tipS = tip != null ? students.find((s) => s.id === tip) : null;
@@ -181,6 +191,25 @@ function ProxMap({ students, alerts, threshold, labels, focusReq }: { students: 
             <g key={a.id} className="ac-link" aria-hidden="true">
               <line x1={sx(p.x)} y1={sy(p.y)} x2={sx(q.x)} y2={sy(q.y)} />
               <text x={(sx(p.x) + sx(q.x)) / 2} y={(sy(p.y) + sy(q.y)) / 2 - 8} textAnchor="middle">{fmtDist(a.distance_m)}</text>
+            </g>
+          );
+        })}
+        {links.map((l) => {
+          // Twins / same house / same room: a dashed line with the kind written above it. The text follows the line when it fits,
+          // is shortened when the line is short, and sits above the pair when the line is shorter still (small screens, zoomed out).
+          const p = world.get(l.a), q = world.get(l.b); if (!p || !q) return null;
+          const x1 = sx(p.x), y1 = sy(p.y), x2 = sx(q.x), y2 = sy(q.y);
+          const len = Math.hypot(x2 - x1, y2 - y1), fs = size.w < 420 ? 10 : 12, cw = fs * 0.62;
+          const full = `${l.label} · ${fmtDist(l.distance_m)}`;
+          const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+          let ang = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI; if (ang > 90 || ang < -90) ang += 180;  // never upside down
+          const along = len >= l.label.length * cw + 18;
+          return (
+            <g key={"r" + l.id} className="ac-rel" role="img" aria-label={`${l.label}: ${fmtDist(l.distance_m)} apart. Expected to be close, not locked.`}>
+              <line x1={x1} y1={y1} x2={x2} y2={y2} />
+              {along
+                ? <text transform={`translate(${mx} ${my}) rotate(${ang})`} y={-6} textAnchor="middle" fontSize={fs}>{len >= full.length * cw + 18 ? full : l.label}</text>
+                : <text x={mx} y={my - 16} textAnchor="middle" fontSize={fs}>{l.label}</text>}
             </g>
           );
         })}
@@ -227,6 +256,7 @@ function ProxMap({ students, alerts, threshold, labels, focusReq }: { students: 
             <span className={tipS.moving ? "mv" : ""}>{!tipS.fresh ? `No update for ${tipS.age_s}s` : tipS.moving ? `Moving (${tipS.moving_source === "gps" ? "position changing" : "device motion"})` : "Staying still"}</span>
             <span>Accuracy ±{Math.round(tipS.accuracy)} m{tipS.poor ? " (too rough to compare)" : ""}{tipS.speed != null && tipS.speed > 0.3 ? ` · ${(tipS.speed * 3.6).toFixed(1)} km/h` : ""}</span>
             {other && <span className="al">⚠ {fmtDist(tipAlert!.distance_m)} from {other.name}</span>}
+            {relOf.get(tipS.id) && <span className="rel">👥 {relOf.get(tipS.id)!.label}: {fmtDist(relOf.get(tipS.id)!.distance_m)} from {students.find((x) => x.id === (relOf.get(tipS.id)!.a === tipS.id ? relOf.get(tipS.id)!.b : relOf.get(tipS.id)!.a))?.name ?? "a relative"}, not locked</span>}
             <span className={c.bad ? "al" : "dim"}>{c.loc} · {c.ble} · {c.net} · {c.mo}</span>
             <PlaceLine lat={tipS.lat} lng={tipS.lng} prefix="Near " />
             <span className="dim">Updated {tipS.age_s}s ago</span>
@@ -274,6 +304,19 @@ export default function AntiCheat({ exams }: { exams: AcExam[] }) {
 
   const review = async (id: number) => { try { await api(`/proctoring/alerts/${id}/ack/`, { body: {} }); load(); } catch (e: any) { setErr(e?.message || "Could not save."); } };
 
+  const [msgTo, setMsgTo] = useState<{ id: number; name: string }[] | null>(null);
+  const markRelated = async (ids: number[], kind: string) => {
+    try { await api("/proctoring/relations/", { body: { students: ids, kind } }); load(); }
+    catch (e: any) { setErr(e?.message || "Could not save."); }
+  };
+  const reviewFlag = async (id: number) => { try { await api(`/proctoring/flags/${id}/ack/`, { body: {} }); load(); } catch (e: any) { setErr(e?.message || "Could not save."); } };
+  const flags = data?.flags ?? [];
+  const openFlags = flags.filter((f) => !f.acknowledged && f.severity !== "info");
+
+  const unlock = async (id: number) => { try { await api(`/proctoring/alerts/${id}/unlock/`, { body: {} }); load(); } catch (e: any) { setErr(e?.message || "Could not unlock."); } };
+  const unlockAll = async () => { if (!examId || !confirm("Unlock every locked student of this exam?")) return; try { await api(`/proctoring/exams/${examId}/unlock-all/`, { body: {} }); load(); } catch (e: any) { setErr(e?.message || "Could not unlock."); } };
+
+  const locked = data?.alerts.filter((a) => a.locked) ?? [];
   const active = data?.alerts.filter((a) => a.active) ?? [];
   const past = data?.alerts.filter((a) => !a.active) ?? [];
   const moving = data?.students.filter((s) => s.moving && s.fresh).length ?? 0;
@@ -292,17 +335,24 @@ export default function AntiCheat({ exams }: { exams: AcExam[] }) {
           <span><b>{data ? tracked : "–"}</b><small>located</small></span>
           <span><b>{data ? moving : "–"}</b><small>moving</small></span>
           <span className={active.length ? "ac-bad" : ""}><b>{data ? active.length : "–"}</b><small>too close</small></span>
+          <span className={openFlags.length ? "ac-bad" : ""}><b>{data ? openFlags.length : "–"}</b><small>to check</small></span>
+          {data?.lock_enabled && <span className={locked.length ? "ac-bad" : ""}><b>{data ? locked.length * 2 : "–"}</b><small>locked</small></span>}
         </div>
         <label className="ac-chk"><input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Show names</label>
       </div>
       {err && <p className="lb-alert" role="alert">{err} Retrying…</p>}
       {data && !data.enabled && <p className="lb-alert">Location monitoring is switched off on the server (PROCTORING_ENABLED=0).</p>}
+      {locked.length > 0 && (
+        <div className="ac-banner ac-locked" role="alert"><Icon n="shield" size={20} /> <b>{locked.length === 1 ? "2 students are locked out of their exam." : `${locked.length * 2} students are locked out of their exam.`} Their timers keep running, unlock them as soon as they have moved apart.</b>
+          <button className="btn" onClick={unlockAll}>Unlock all</button></div>
+      )}
+      {data && !data.lock_enabled && <p className="muted small">Locking is off. Turn it on in Settings → School to lock students who sit closer than {data.alert_meters} m.</p>}
       {active.length > 0 && (
         <div className="ac-banner" role="alert"><Icon n="shield" size={20} /> <b>{active.length === 1 ? "Two students are" : `${active.length} pairs of students are`} sitting less than {data?.alert_meters ?? 20} m apart.</b></div>
       )}
       <div className="ac-grid2">
         <div>
-          <ProxMap students={data?.students ?? []} alerts={data?.alerts ?? []} threshold={data?.alert_meters ?? 20} labels={labels} focusReq={focus} />
+          <ProxMap students={data?.students ?? []} alerts={data?.alerts ?? []} links={data?.links ?? []} threshold={data?.alert_meters ?? 20} labels={labels} focusReq={focus} />
           <p className="ac-legend" aria-hidden="true">
             <span><i className="d ok" />still</span><span><i className="d mv" />moving</span><span><i className="d al" />too close</span><span><i className="d po" />rough position</span><span><i className="d st" />no recent update</span>
           </p>
@@ -313,12 +363,44 @@ export default function AntiCheat({ exams }: { exams: AcExam[] }) {
             <ul className="ac-alerts">
               {[...active, ...past].map((a) => (
                 <li key={a.id} className={a.active ? "on" : "off"}>
-                  <div><b>{a.a.name}</b> &amp; <b>{a.b.name}</b></div>
+                  <div><b>{a.a.name}</b> &amp; <b>{a.b.name}</b>{a.locked && <span className="ac-lock-tag"> 🔒 locked</span>}</div>
                   <small>{a.active ? `${fmtDist(a.distance_m)} apart now` : `ended · closest ${fmtDist(a.min_distance_m)}`} · since {hhmm(a.first_seen)} · {a.confidence === "confirmed" ? "precise" : "rough position, check"}</small>
                   {a.active && <PlaceLine lat={a.lat} lng={a.lng} prefix="Near " />}
                   <div className="ac-act">
                     {a.active && <button className="btn" onClick={() => setFocus({ ids: [a.a.id, a.b.id], n: Date.now() })}>Locate</button>}
+                    {a.locked && <button className="btn primary" onClick={() => unlock(a.id)}>{a.active ? "Unlock (still close)" : "Unlock"}</button>}
+                    <button className="btn" onClick={() => setMsgTo([a.a, a.b])}>Message</button>
+                    <select className="input sm" aria-label={`Mark ${a.a.name} and ${a.b.name} as related`} value="" onChange={(e) => { const k = e.target.value; if (k && confirm(`Mark ${a.a.name} and ${a.b.name} as related (${e.target.selectedOptions[0].text})? They will no longer raise alerts or be locked.`)) markRelated([a.a.id, a.b.id], k); }}>
+                      <option value="">Mark as related…</option><option value="twin">Twins</option><option value="house">Same house</option><option value="room">Same room</option>
+                    </select>
                     {a.acknowledged ? <small className="ok">Reviewed</small> : <button className="btn" onClick={() => review(a.id)}>Mark reviewed</button>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {(data?.links?.length ?? 0) > 0 && (
+            <>
+              <h3>Related students close together <small>({data!.links!.length})</small></h3>
+              <ul className="ac-alerts">
+                {data!.links!.map((l) => { const nm = (id: number) => data!.students.find((x) => x.id === id)?.name ?? "Student"; return (
+                  <li key={l.id} className="off"><div><b>{nm(l.a)}</b> &amp; <b>{nm(l.b)}</b> <span className="ac-sev info">{l.label}</span></div>
+                    <small>{fmtDist(l.distance_m)} apart · expected, no alert and not locked</small></li>); })}
+              </ul>
+            </>
+          )}
+          <h3>Device and position checks <small>({openFlags.length} open)</small></h3>
+          <p className="muted small">Signs to look at, not proof: a phone that changed during the exam, or a position that does not behave like real GPS.</p>
+          {data && !flags.length ? <p className="lb-empty">Nothing unusual so far.</p> : (
+            <ul className="ac-alerts">
+              {flags.map((f) => (
+                <li key={f.id} className={f.acknowledged || f.severity === "info" ? "off" : "on"}>
+                  <div><b>{f.student.name}</b> <span className={`ac-sev ${f.severity}`}>{f.severity === "high" ? "high" : f.severity === "warning" ? "check" : "info"}</span> {f.label}{f.count > 1 && <small> ×{f.count}</small>}</div>
+                  <small>{f.text}</small>
+                  <small>since {hhmm(f.first_seen)}{f.count > 1 ? `, last ${hhmm(f.last_seen)}` : ""}</small>
+                  <div className="ac-act">
+                    <button className="btn" onClick={() => setMsgTo([{ id: f.student.id, name: f.student.name }])}>Message</button>
+                    {f.acknowledged ? <small className="ok">Reviewed</small> : <button className="btn" onClick={() => reviewFlag(f.id)}>Mark reviewed</button>}
                   </div>
                 </li>
               ))}
@@ -335,6 +417,8 @@ export default function AntiCheat({ exams }: { exams: AcExam[] }) {
           <p className="muted small">An alert is information to check, not proof of cheating: siblings or neighbours may live close by. Positions are kept only while the exam runs.</p>
         </aside>
       </div>
+      <RelatedStudents onChange={load} />
+      {msgTo && <SendMessage to={msgTo} onClose={() => setMsgTo(null)} />}
     </div>
   );
 }

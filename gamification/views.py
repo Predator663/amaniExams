@@ -11,6 +11,7 @@ from academics.models import Subject, TeacherAssignment
 from accounts.permissions import IsAdminRole, IsAnyUser, IsStaffUser, IsStudent
 from core.i18n import lang_of
 from core.models import audit
+from core.pagination import envelope, page_params, paginate, wants_page
 from exams.views import _visible_result_or_404
 from questions.models import Question
 from . import catalog, rules, services
@@ -60,6 +61,14 @@ def my_badges(request):
 @api_view(["GET"])
 @permission_classes([IsStudent])
 def my_xp(request):
+    if wants_page(request):
+        page, size = page_params(request, 15)
+        data = services.xp_history(request.user, size, (page - 1) * size)
+        if page > 1 and not data["results"]:  # the page is past the end: show the last one
+            page = max(1, -(-data["count"] // size))
+            data = services.xp_history(request.user, size, (page - 1) * size)
+        rows = data.pop("results")
+        return Response(envelope(data.pop("count"), page, size, rows, **data))
     try:
         limit = max(1, min(int(request.query_params.get("limit", 50)), 200))
         offset = max(0, int(request.query_params.get("offset", 0)))
@@ -96,7 +105,14 @@ def my_profile(request):
 @permission_classes([IsStudent])
 def leaderboard(request):
     """SRS 5.6: class ranking by XP (never by marks). ?period=weekly (default) or all."""
-    return Response(services.leaderboard(request.user, request.query_params.get("period", "weekly")))
+    period = request.query_params.get("period", "weekly")
+    if not wants_page(request):
+        return Response(services.leaderboard(request.user, period))
+    data = services.leaderboard(request.user, period, limit=1000)  # whole class, then one page of it
+    if not data.get("enabled"):
+        return Response(data)
+    pg = paginate(request, data.pop("entries"), default=10)
+    return Response({**data, "entries": pg.pop("results"), **pg})
 
 
 @api_view(["GET"])

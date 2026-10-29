@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { Pager, useClientPage } from "@/components/Pager";
 import Shell from "@/components/Shell";
 import { RichHtml } from "@/components/Rich";
 import { ErrorNote, Loading, useLoad, useQuery } from "@/components/ui";
@@ -12,6 +13,7 @@ import { useSession } from "@/lib/session";
 function Review({ id }: { id: number }) {
   const { t } = useSession();
   const { data, error, loading, reload } = useLoad(() => api<any[]>(`/results/${id}/review/`), [id]);
+  const pg = useClientPage(data, 10);  // each page of questions is watched as it appears, so the "seen" count still works
   const [toast, setToast] = useState("");
   const seen = useRef<Set<number>>(new Set()), timer = useRef<any>(null);
 
@@ -32,7 +34,7 @@ function Review({ id }: { id: number }) {
     document.querySelectorAll("[data-n]").forEach((el) => io.observe(el));
     return () => io.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]);
+  }, [data, pg.page, pg.pager.size]);
 
   if (loading) return <Loading />;
   if (error || !data) return <ErrorNote error={error} retry={reload} />;
@@ -41,7 +43,7 @@ function Review({ id }: { id: number }) {
       <Link href={`/result/?id=${id}`}>← {t("back")}</Link>
       <h1>{t("review_answers")}</h1>
       {toast && <p className="hint pop" role="status">⭐ {toast}</p>}
-      {data.map((q) => {
+      <div ref={pg.top}>{pg.rows.map((q) => {
         const full = q.marks_awarded >= q.marks - 1e-9, part = q.marks_awarded > 0 && !full;
         return (
           <article key={q.number} data-n={q.number} className="card">
@@ -56,7 +58,8 @@ function Review({ id }: { id: number }) {
             )}
           </article>
         );
-      })}
+      })}</div>
+      <Pager {...pg.pager} />
     </>
   );
 }

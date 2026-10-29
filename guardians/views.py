@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from accounts.models import User
 from accounts.permissions import IsAdminRole
 from core.models import audit
+from core.pagination import paginate, page_params, wants_page
 from . import crypto, services
 from .models import Guardian, GuardianLink, SmsConfig, SmsDevice, SmsJob
 from .phones import mask, normalize_phone
@@ -65,15 +66,23 @@ def guardians(request):
             return q in g.name.lower() or q in kids or (len(digits) >= 4 and digits in g.phone)
         items = [g for g in items if hit(g)]
     total = len(items)
-    try:
-        offset = max(0, int(p.get("offset", 0)))
-    except ValueError:
-        offset = 0
-    page = items[offset:offset + PAGE]
+    size, meta = PAGE, {}
+    if wants_page(request):
+        pg, size = page_params(request, PAGE)
+        pages = max(1, -(-total // size))
+        pg = min(pg, pages)
+        offset = (pg - 1) * size
+        meta = {"count": total, "page": pg, "pages": pages, "page_size": size}
+    else:
+        try:
+            offset = max(0, int(p.get("offset", 0)))
+        except ValueError:
+            offset = 0
+    page = items[offset:offset + size]
     last = {}
     for j in SmsJob.objects.filter(guardian__in=[g.pk for g in page]).order_by("id"):
         last[j.guardian_id] = j
-    return Response({"total": total, "offset": offset, "results": [_row(g, last.get(g.pk)) for g in page]})
+    return Response({"total": total, "offset": offset, **meta, "results": [_row(g, last.get(g.pk)) for g in page]})
 
 
 @api_view(["PATCH", "DELETE"])
@@ -204,16 +213,20 @@ def send(request):
     if scope == "class" and not d.get("class_id"):
         return _err("Choose a class.")
     resend = d.get("resend") is True
+    note = services.clean_note(d.get("note"))
+    if len(note) > services.NOTE_MAX:
+        return _err(f"The extra message is too long ({len(note)} characters). Keep it to {services.NOTE_MAX} characters or fewer.")
     items, skipped = services.plan_send(scope, d.get("class_id"), d.get("guardian_ids"), resend)
     info = {"messages": len(items), "students": sum(len(k) for _, k in items), "skipped": skipped,
-            "whatsapp_parents": sum(1 for g, _ in items if g.has_whatsapp)}
+            "whatsapp_parents": sum(1 for g, _ in items if g.has_whatsapp), "note": note,
+            "preview": services.preview(items, SmsConfig.load(), note)}
     if d.get("dry_run") is not False:
         return Response({"dry_run": True, **info})
     cfg = SmsConfig.load()
     if not cfg.public_url.strip():
         return _err("First write the school's web address in the Phone tab. It goes into every message.")
-    n = services.queue_send(items, request.user)
-    audit(request.user, "sms.queue", n, scope=scope, resend=resend, students=info["students"])
+    n = services.queue_send(items, request.user, note)
+    audit(request.user, "sms.queue", n, scope=scope, resend=resend, students=info["students"], custom_note=bool(note))
     return Response({"dry_run": False, "queued": n, **info}, status=201)
 
 
@@ -224,13 +237,13 @@ def jobs(request):
     qs = SmsJob.objects.select_related("guardian", "device").order_by("-id")
     if p.get("status"):
         qs = qs.filter(status=p["status"])
-    out = []
-    for j in qs[:200]:
-        out.append({"id": j.pk, "parent": j.guardian.name if j.guardian else "(deleted)", "phone": mask(crypto.decrypt(j.to_enc)),
-                    "summary": j.summary, "status": j.status, "error": j.error, "attempts": j.attempts,
-                    "whatsapp": bool(j.guardian and j.guardian.has_whatsapp), "created_at": j.created_at, "sent_at": j.sent_at,
-                    "phone_name": j.device.name if j.device else ""})
-    return Response(out)
+    def row(j):
+        return {"id": j.pk, "parent": j.guardian.name if j.guardian else "(deleted)", "phone": mask(crypto.decrypt(j.to_enc)),
+                "summary": j.summary, "note": j.note, "status": j.status, "error": j.error, "attempts": j.attempts,
+                "whatsapp": bool(j.guardian and j.guardian.has_whatsapp), "created_at": j.created_at, "sent_at": j.sent_at,
+                "phone_name": j.device.name if j.device else ""}
+    paged = paginate(request, qs, default=20, row=row)
+    return Response(paged if paged is not None else [row(j) for j in qs[:200]])
 
 
 @api_view(["POST"])
@@ -269,7 +282,8 @@ def devices(request):
         d = SmsDevice.objects.create(name=name, token_hash=hashlib.sha256(token.encode()).hexdigest(), created_by=request.user)
         audit(request.user, "sms.device.create", d.pk)
         return Response({**_device_row(d), "token": token}, status=201)  # the only time the token is shown
-    return Response([_device_row(d) for d in SmsDevice.objects.order_by("-id")])
+    qs = SmsDevice.objects.order_by("-id")
+    return Response(paginate(request, qs, default=10, row=_device_row) or [_device_row(d) for d in qs])
 
 
 @api_view(["DELETE"])

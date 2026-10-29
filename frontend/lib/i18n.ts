@@ -3,10 +3,13 @@
 type Dict = Record<string, string>;
 
 const en: Dict = {
+  pg_prev: "Previous", pg_next: "Next", pg_pages: "Pages", pg_page_x: "Page {n}", pg_showing: "Showing {a}–{b} of {n}", pg_per_page: "Per page",
   app_name: "Amani Exams", test_connection: "Test the connection", loading: "Loading…", try_again: "Try again", close: "Close", done: "Done", save: "Save", saved: "Saved", back: "Back", back_home: "Back to home",
   skip_to_content: "Skip to content", main_menu: "Main menu", accessibility: "Accessibility", notifications: "Notifications", image: "Image", zoom_in: "Zoom in", zoom_out: "Zoom out",
   nav_home: "Home", nav_practice: "Practice", nav_results: "Results", nav_badges: "Badges", nav_more: "More", nav_settings: "Settings", foot_about: "About", foot_privacy: "Privacy policy", foot_terms: "Terms of use", foot_access: "Accessibility", foot_links: "Footer links", foot_rights: "All rights reserved.", last_updated: "Last updated", about_title: "About Amani Exams", privacy_title: "Privacy policy", terms_title: "Terms of use", access_title: "Accessibility statement", open_menu: "Open menu", signed_in_as: "Signed in as", role_student: "Student", language_menu: "Language", nav_exams: "Exams",
   online_n: "{n} students online",
+  messages: "Messages", msg_from: "Message from the school", msg_tap: "Tap to close", msg_more: "+{n} more", msg_empty: "You have no messages.",
+  msg_new: "New", msg_note: "Messages from the school stay here until an administrator removes them.", msg_mark: "Mark as read",
   username: "Username", password: "Password", show_password: "Show password", log_in: "Log in", log_out: "Log out", login_sub: "Sign in to sit your exams",
   session_ended: "You were signed out because you logged in on another device, or your session ended. Please log in again.",
   choose_new_password: "Choose a new password", change_password: "Change password", current_password: "Current password", new_password: "New password", repeat_password: "Repeat new password",
@@ -65,14 +68,20 @@ const en: Dict = {
   dev_confirm: "I have turned on Wi-Fi and Bluetooth and will keep Location, Wi-Fi and Bluetooth on during the exam.",
   dev_need_all: "Check your phone, accept the terms and confirm the settings to begin.",
   loc_lost_title: "Location is off", loc_lost_body: "Turn on Location (GPS) and allow it for this app. Your exam is waiting and the timer keeps running.", loc_denied_body: "Location is blocked. Allow location for this app in your phone or browser settings. Your exam is waiting and the timer keeps running.",
+  lock_banner: "You are sitting too close to another student. You must move apart.", lock_title: "Your exam is locked",
+  lock_body: "Move away from the other student. Your answers are safe. The timer keeps running, so no extra time is given. After you have moved apart, wait for the invigilator to unlock your exam.",
+  lock_wait: "This screen opens by itself when an administrator unlocks your exam.",
   loc_retry: "I turned it on, continue", loc_on: "Location on", bt_warn: "Bluetooth looks off. Please turn it on.",
 };
 
 const sw: Dict = {
+  pg_prev: "Iliyopita", pg_next: "Inayofuata", pg_pages: "Kurasa", pg_page_x: "Ukurasa {n}", pg_showing: "Inaonyesha {a}–{b} kati ya {n}", pg_per_page: "Kwa ukurasa",
   app_name: "Mitihani ya Amani", test_connection: "Jaribu muunganisho", loading: "Inapakia…", try_again: "Jaribu tena", close: "Funga", done: "Tayari", save: "Hifadhi", saved: "Imehifadhiwa", back: "Rudi", back_home: "Rudi mwanzo",
   skip_to_content: "Ruka hadi maudhui", main_menu: "Menyu kuu", accessibility: "Ufikivu", notifications: "Arifa", image: "Picha", zoom_in: "Kuza", zoom_out: "Punguza",
   nav_home: "Mwanzo", nav_practice: "Mazoezi", nav_results: "Matokeo", nav_badges: "Beji", nav_more: "Zaidi", nav_settings: "Mipangilio", foot_about: "Kuhusu", foot_privacy: "Sera ya faragha", foot_terms: "Masharti ya matumizi", foot_access: "Ufikivu", foot_links: "Viungo vya chini", foot_rights: "Haki zote zimehifadhiwa.", last_updated: "Imesasishwa", about_title: "Kuhusu Mitihani ya Amani", privacy_title: "Sera ya faragha", terms_title: "Masharti ya matumizi", access_title: "Taarifa ya ufikivu", open_menu: "Fungua menyu", signed_in_as: "Umeingia kama", role_student: "Mwanafunzi", language_menu: "Lugha", nav_exams: "Mitihani",
   online_n: "Wanafunzi {n} mtandaoni",
+  messages: "Ujumbe", msg_from: "Ujumbe kutoka shuleni", msg_tap: "Bonyeza kufunga", msg_more: "+{n} zaidi", msg_empty: "Huna ujumbe.",
+  msg_new: "Mpya", msg_note: "Ujumbe kutoka shuleni unabaki hapa hadi msimamizi auondoe.", msg_mark: "Weka kuwa umesomwa",
   username: "Jina la mtumiaji", password: "Nenosiri", show_password: "Onyesha nenosiri", log_in: "Ingia", log_out: "Toka", login_sub: "Ingia ili ufanye mitihani yako",
   session_ended: "Umetolewa kwa sababu uliingia kwenye kifaa kingine, au muda wa kikao umeisha. Tafadhali ingia tena.",
   choose_new_password: "Chagua nenosiri jipya", change_password: "Badilisha nenosiri", current_password: "Nenosiri la sasa", new_password: "Nenosiri jipya", repeat_password: "Rudia nenosiri jipya",
@@ -131,6 +140,9 @@ const sw: Dict = {
   dev_confirm: "Nimewasha Wi-Fi na Bluetooth, na nitaacha Eneo, Wi-Fi na Bluetooth vikiwa vimewashwa wakati wa mtihani.",
   dev_need_all: "Kagua simu yako, kubali masharti na uthibitishe mipangilio ili uanze.",
   loc_lost_title: "Eneo limezimwa", loc_lost_body: "Washa Eneo (GPS) na uliruhusu kwa programu hii. Mtihani wako unasubiri na saa inaendelea.", loc_denied_body: "Eneo limezuiwa. Liruhusu kwa programu hii kwenye mipangilio ya simu au kivinjari. Mtihani wako unasubiri na saa inaendelea.",
+  lock_banner: "Umekaa karibu sana na mwanafunzi mwingine. Lazima mtengane.", lock_title: "Mtihani wako umefungwa",
+  lock_body: "Ondoka mbali na mwanafunzi mwingine. Majibu yako ni salama. Saa inaendelea, kwa hiyo hakuna muda wa ziada. Mkishatengana, subiri msimamizi afungue mtihani wako.",
+  lock_wait: "Skrini hii itafunguka yenyewe msimamizi atakapofungua mtihani wako.",
   loc_retry: "Nimewasha, endelea", loc_on: "Eneo limewashwa", bt_warn: "Bluetooth inaonekana imezimwa. Tafadhali iwashe.",
 };
 

@@ -399,3 +399,68 @@ class BuilderTests(Base):
         rows = self.t.get(f"/api/exams/{self.exam.pk}/questions/").data
         self.assertEqual([x["source"] for x in rows], [m2, m1, tf1])  # multiple choice first (A), true/false second (B)
         self.assertEqual([x["section"] for x in rows], ["A", "A", "B"])
+
+
+class SubmissionAndOverviewTests(Base):
+    """Teacher submissions (who + when) and the staff overview."""
+
+    def setUp(self):
+        super().setUp()
+        from academics.models import TeacherAssignment
+        self.teacher = User.objects.create(username="teach2", first_name="Neema", last_name="Joseph", role="teacher",
+                                           password=make_password("T3ach-pass!"))
+        TeacherAssignment.objects.create(teacher=self.teacher, subject=self.subject, school_class=self.cls)
+        self.t, self.a = self.client_for(self.teacher), self.client_for(self.admin)
+        self.draft = Exam.objects.create(title="Teacher draft", subject=self.subject, created_by=self.teacher)
+
+    def test_submit_needs_a_paper_then_records_teacher_and_time(self):
+        r = self.t.post(f"/api/exams/{self.draft.pk}/submit/")
+        self.assertEqual(r.status_code, 400)  # empty paper
+        ExamQuestion.objects.create(exam=self.draft, position=1, payload=mcq())
+        r = self.t.post(f"/api/exams/{self.draft.pk}/submit/")
+        self.assertEqual(r.status_code, 200, r.data)
+        self.draft.refresh_from_db()
+        self.assertEqual(self.draft.submitted_by, self.teacher)
+        self.assertIsNotNone(self.draft.submitted_at)
+        row = next(x for x in self.a.get("/api/exams/").data if x["id"] == self.draft.pk)
+        self.assertEqual(row["submitted_by_name"], "Neema Joseph")
+        self.assertTrue(row["awaiting_scheduling"])
+        self.assertEqual(row["subject_name"], "Mathematics")
+
+    def test_submitted_stamp_cannot_be_written_through_the_api(self):
+        r = self.t.patch(f"/api/exams/{self.draft.pk}/", {"submitted_at": "2020-01-01T00:00:00Z"}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.draft.refresh_from_db()
+        self.assertIsNone(self.draft.submitted_at)
+
+    def test_only_a_draft_of_your_own_subject_can_be_submitted(self):
+        other = Subject.objects.create(name="History")
+        foreign = Exam.objects.create(title="History", subject=other, created_by=self.admin)
+        ExamQuestion.objects.create(exam=foreign, position=1, payload=mcq())
+        self.assertIn(self.t.post(f"/api/exams/{foreign.pk}/submit/").status_code, (403, 404))
+        self.assertEqual(self.t.post(f"/api/exams/{self.exam.pk}/submit/").status_code, 400)  # already scheduled
+
+    def test_overview_for_admin_and_teacher(self):
+        ExamQuestion.objects.create(exam=self.draft, position=1, payload=mcq())
+        self.t.post(f"/api/exams/{self.draft.pk}/submit/")
+        a = self.a.get("/api/overview/")
+        self.assertEqual(a.status_code, 200, a.data)
+        self.assertEqual(a.data["totals"]["awaiting_scheduling"], 1)
+        self.assertEqual(a.data["pending_submissions"][0]["submitted_by"], "Neema Joseph")
+        self.assertEqual(a.data["totals"]["scheduled"], 1)
+        self.assertIn("students_online", a.data["totals"])
+        self.assertIn("recent_activity", a.data)
+        t = self.t.get("/api/overview/")
+        self.assertEqual(t.status_code, 200)
+        self.assertNotIn("recent_activity", t.data)  # audit trail is for administrators
+        self.assertNotIn("students_online", t.data["totals"])
+        self.assertEqual(self.client_for(self.amina).get("/api/overview/").status_code, 403)
+
+    def test_overview_shows_a_live_exam_with_counts(self):
+        now = timezone.now()
+        self.exam.status, self.exam.start_at, self.exam.end_at = Exam.SCHEDULED, now - timedelta(minutes=5), now + timedelta(minutes=55)
+        self.exam.save()
+        self.client_for(self.amina).post(f"/api/student/exams/{self.exam.pk}/start/", {"agree_rules": True, "accept_legal": True, "location": {"lat": -6.8, "lng": 39.2, "accuracy": 10}}, format="json")
+        r = self.a.get("/api/overview/").data
+        self.assertEqual(r["totals"]["live_exams"], 1)
+        self.assertEqual(r["live"][0]["eligible"], 2)

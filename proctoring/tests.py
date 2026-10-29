@@ -30,6 +30,9 @@ class ProximityBase(Base):
         self.a_zawadi = services.start_attempt(self.exam, self.zawadi, now=self.at(1))
         self.a_neema = services.start_attempt(self.exam, self.neema, now=self.at(1))
 
+    def board(self):
+        return self.client_for(self.admin).get(f"/api/proctoring/exams/{self.exam.pk}/").json()
+
     def ping(self, user, attempt, pos, **extra):
         # the server ignores reports closer than 2 s apart, so move the stored time back for repeated test pings
         LiveLocation.objects.filter(attempt=attempt).update(updated_at=timezone.now() - timedelta(seconds=5))
@@ -75,9 +78,6 @@ class StartRules(Base):
 
 
 class Proximity(ProximityBase):
-    def board(self):
-        return self.client_for(self.admin).get(f"/api/proctoring/exams/{self.exam.pk}/").json()
-
     def test_two_students_under_20m_raise_an_alert_for_admins(self):
         self.assertEqual(self.ping(self.amina, self.a_amina, at(0, 0)).status_code, 200)
         self.assertEqual(self.ping(self.zawadi, self.a_zawadi, at(12, 5)).status_code, 200)  # 13 m away
@@ -208,3 +208,346 @@ class PlaceName(ProximityBase):
         self.ping(self.zawadi, self.a_zawadi, at(5, 0))
         al = self.client_for(self.admin).get(f"/api/proctoring/exams/{self.exam.pk}/").json()["alerts"][0]
         self.assertAlmostEqual(al["lat"], LAT, places=2)
+
+
+class ProximityLock(ProximityBase):
+    """Admin-set alert distance, and the optional lock of both students' screens until an admin unlocks."""
+
+    def settings(self, **kw):
+        from core.models import SchoolSettings
+        s = SchoolSettings.load()
+        for k, v in kw.items():
+            setattr(s, k, v)
+        s.save()
+
+    def close_pair(self, d=5, acc=8):
+        self.ping(self.amina, self.a_amina, at(0, 0, acc))
+        return self.ping(self.zawadi, self.a_zawadi, at(d, 0, acc))
+
+    def answer(self, user, attempt):
+        q = attempt.order[attempt.current_index]
+        return self.client_for(user).post(f"/api/attempts/{attempt.pk}/answer/", {"question_id": q, "response": "A"}, format="json")
+
+    def test_alert_distance_comes_from_settings(self):
+        self.settings(proximity_alert_meters=8)
+        self.close_pair(d=12)
+        self.assertFalse(ProximityAlert.objects.exists())  # 12 m is outside the 8 m the admin chose
+        self.settings(proximity_alert_meters=30)
+        self.ping(self.zawadi, self.a_zawadi, at(25, 0))
+        self.assertEqual(ProximityAlert.objects.count(), 1)  # 25 m is inside 30 m
+        self.assertEqual(self.board()["alert_meters"], 30)
+
+    def test_admin_can_edit_the_distance_and_lock_option_and_it_is_validated(self):
+        a = self.client_for(self.admin)
+        r = a.patch("/api/settings/", {"proximity_alert_meters": 35.5, "proximity_lock_enabled": True}, format="json")
+        self.assertEqual((r.status_code, r.json()["proximity_alert_meters"], r.json()["proximity_lock_enabled"]), (200, 35.5, True))
+        for bad in (0, 501, "abc", None):
+            self.assertEqual(a.patch("/api/settings/", {"proximity_alert_meters": bad}, format="json").status_code, 400)
+        self.assertEqual(a.patch("/api/settings/", {"proximity_lock_enabled": "yes"}, format="json").status_code, 400)
+        self.assertEqual(self.client_for(self.teacher).patch("/api/settings/", {"proximity_alert_meters": 5}, format="json").status_code, 403)
+
+    def test_off_by_default_alert_does_not_lock(self):
+        self.close_pair()
+        al = ProximityAlert.objects.get()
+        self.assertFalse(al.locked)
+        self.assertEqual(self.answer(self.amina, self.a_amina).status_code, 200)
+
+    def test_close_students_are_both_locked_and_cannot_answer_but_the_clock_runs(self):
+        self.settings(proximity_lock_enabled=True)
+        r = self.close_pair()
+        self.assertTrue(r.json()["locked"])  # the phone learns about the lock from its own position report
+        self.assertTrue(ProximityAlert.objects.get().locked)
+        deadline = Attempt.objects.get(pk=self.a_amina.pk).deadline_at
+        for u, att in ((self.amina, self.a_amina), (self.zawadi, self.a_zawadi)):
+            r = self.answer(u, att)
+            self.assertEqual((r.status_code, r.json()["code"]), (423, "locked"))
+            self.assertTrue(self.client_for(u).get(f"/api/attempts/{att.pk}/").json()["locked"])
+        self.assertEqual(Attempt.objects.get(pk=self.a_amina.pk).deadline_at, deadline)  # time was not paused or extended
+        self.assertFalse(self.client_for(self.neema).get(f"/api/attempts/{self.a_neema.pk}/").json()["locked"])  # a bystander far away
+        self.assertEqual(self.answer(self.neema, self.a_neema).status_code, 200)
+        self.assertEqual(Notification.objects.filter(kind="integrity_alert").count(), 1)
+        self.assertIn("locked", Notification.objects.filter(kind="integrity_alert").first().body)
+
+    def test_moving_apart_does_not_unlock_only_the_admin_does(self):
+        self.settings(proximity_lock_enabled=True)
+        self.close_pair()
+        ProximityAlert.objects.update(last_seen=timezone.now() - timedelta(minutes=3))
+        self.ping(self.zawadi, self.a_zawadi, at(300, 0))  # far away now, alert has ended
+        b = self.board()
+        self.assertFalse(b["alerts"][0]["active"])
+        self.assertTrue(b["alerts"][0]["locked"])
+        self.assertEqual(self.answer(self.amina, self.a_amina).status_code, 423)
+        r = self.client_for(self.admin).post(f"/api/proctoring/alerts/{ProximityAlert.objects.get().pk}/unlock/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.answer(self.amina, self.a_amina).status_code, 200)
+        self.assertEqual(self.answer(self.zawadi, self.a_zawadi).status_code, 200)
+        self.assertFalse(self.ping(self.amina, self.a_amina, at(0, 0)).json()["locked"])
+
+    def test_unlocking_while_still_close_does_not_lock_again_at_once(self):
+        from core.models import AuditLog
+        self.settings(proximity_lock_enabled=True)
+        self.close_pair()
+        al = ProximityAlert.objects.get()
+        self.client_for(self.admin).post(f"/api/proctoring/alerts/{al.pk}/unlock/")
+        self.assertFalse(self.close_pair().json()["locked"])
+        self.assertEqual(ProximityAlert.objects.count(), 1)
+        self.assertTrue(AuditLog.objects.filter(action="proximity_lock").exists() and AuditLog.objects.filter(action="proximity_unlock").exists())
+        # they part for good, then sit close again later: a new alert, a new lock
+        ProximityAlert.objects.update(last_seen=timezone.now() - timedelta(minutes=3))
+        self.ping(self.zawadi, self.a_zawadi, at(300, 0))
+        ProximityAlert.objects.update(active=False)
+        self.ping(self.zawadi, self.a_zawadi, at(4, 0))
+        self.assertEqual(ProximityAlert.objects.count(), 2)
+        self.assertEqual(self.answer(self.amina, self.a_amina).status_code, 423)
+
+    def test_rough_position_alerts_but_never_locks(self):
+        self.settings(proximity_lock_enabled=True)
+        self.ping(self.amina, self.a_amina, at(0, 0, acc=70))
+        r = self.ping(self.zawadi, self.a_zawadi, at(5, 0, acc=10))
+        al = ProximityAlert.objects.get()
+        self.assertEqual((al.confidence, al.locked, r.json()["locked"]), ("possible", False, False))
+        self.ping(self.amina, self.a_amina, at(0, 0, acc=8))  # her position becomes precise: now it is confirmed and locks
+        self.assertTrue(ProximityAlert.objects.get().locked)
+
+    def test_turning_the_option_off_releases_everyone_and_unlock_all(self):
+        self.settings(proximity_lock_enabled=True)
+        self.close_pair()
+        self.assertEqual(self.answer(self.amina, self.a_amina).status_code, 423)
+        self.settings(proximity_lock_enabled=False)
+        self.assertEqual(self.answer(self.amina, self.a_amina).status_code, 200)
+        self.settings(proximity_lock_enabled=True)
+        self.assertEqual(self.answer(self.zawadi, self.a_zawadi).status_code, 423)
+        r = self.client_for(self.admin).post(f"/api/proctoring/exams/{self.exam.pk}/unlock-all/")
+        self.assertEqual((r.status_code, r.json()["unlocked"]), (200, 1))
+        self.assertEqual(self.answer(self.zawadi, self.a_zawadi).status_code, 200)
+
+    def test_only_admins_can_unlock(self):
+        self.settings(proximity_lock_enabled=True)
+        self.close_pair()
+        al = ProximityAlert.objects.get()
+        for who in (self.amina, self.zawadi, self.teacher):  # a locked student must not be able to free herself
+            self.assertEqual(self.client_for(who).post(f"/api/proctoring/alerts/{al.pk}/unlock/").status_code, 403)
+            self.assertEqual(self.client_for(who).post(f"/api/proctoring/exams/{self.exam.pk}/unlock-all/").status_code, 403)
+        al.refresh_from_db()
+        self.assertIsNone(al.unlocked_at)
+
+
+class IntegrityChecks(ProximityBase):
+    """Device changes and signs of a faked position raise flags for the administrators. Flags inform, they never block."""
+    ANDROID = "Mozilla/5.0 (Linux; Android 13; TECNO) AppleWebKit/537.36 Chrome/118 Mobile"
+    WINDOWS = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/118"
+
+    def send(self, user, attempt, pos, device="", ua=ANDROID, ip="10.0.0.5"):
+        LiveLocation.objects.filter(attempt=attempt).update(updated_at=timezone.now() - timedelta(seconds=5))
+        body = {**pos, "device": device} if device else dict(pos)
+        return self.client_for(user).post(f"/api/attempts/{attempt.pk}/location/", body, format="json",
+                                          HTTP_USER_AGENT=ua, HTTP_X_FORWARDED_FOR=f"6.6.6.6, {ip}")
+
+    def flags(self, kind=None):
+        from .models import IntegrityFlag
+        q = IntegrityFlag.objects.all()
+        return q.filter(kind=kind) if kind else q
+
+    def test_one_device_all_exam_raises_nothing(self):
+        for i in range(12):
+            self.assertEqual(self.send(self.amina, self.a_amina, at(i % 3, i % 2, acc=5 + i % 3), device="dev-aaaa-1111").status_code, 200)
+        self.assertEqual(self.flags().count(), 0)
+        ll = LiveLocation.objects.get(attempt=self.a_amina)
+        self.assertEqual((ll.devices["first"]["id"], ll.devices["first"]["platform"], ll.devices["first"]["ip"]), ("dev-aaaa-1111", "Android", "10.0.0.5"))
+
+    def test_another_kind_of_device_is_a_high_flag_and_admins_are_told(self):
+        self.send(self.amina, self.a_amina, at(0, 0), device="dev-aaaa-1111")
+        self.send(self.amina, self.a_amina, at(1, 0), device="dev-bbbb-2222", ua=self.WINDOWS, ip="10.0.0.9")
+        f = self.flags("device_changed").get()
+        self.assertEqual((f.severity, f.count, f.student_id), ("high", 1, self.amina.pk))
+        self.assertEqual(f.detail["at_start"]["platform"], "Android")
+        self.assertEqual(f.detail["to"]["platform"], "Windows")
+        self.assertNotIn("dev-bbbb-2222", str(f.detail))  # only a short code is kept, never the whole id
+        self.assertEqual(Notification.objects.filter(kind="integrity_alert").count(), 1)
+        row = self.board()["flags"][0]
+        self.assertEqual((row["kind"], row["severity"], row["acknowledged"], row["student"]["id"]), ("device_changed", "high", False, self.amina.pk))
+        self.assertIn("Windows", row["text"])
+        self.send(self.amina, self.a_amina, at(2, 0), device="dev-bbbb-2222", ua=self.WINDOWS, ip="10.0.0.9")
+        self.assertEqual(self.flags("device_changed").get().count, 1)  # staying on the new device is not a new change
+
+    def test_same_phone_new_id_is_only_a_warning(self):
+        self.send(self.amina, self.a_amina, at(0, 0), device="dev-aaaa-1111")
+        self.send(self.amina, self.a_amina, at(0, 1), device="dev-cccc-3333")  # same kind of phone, same network
+        self.assertEqual(self.flags("device_changed").get().severity, "warning")
+
+    def test_clients_without_a_device_id_are_never_flagged(self):
+        self.send(self.amina, self.a_amina, at(0, 0), device="")
+        self.send(self.amina, self.a_amina, at(0, 1), device="x")  # too short to be one of ours
+        self.send(self.amina, self.a_amina, at(0, 2), device="dev-aaaa-1111", ua=self.WINDOWS)
+        self.assertEqual(self.flags().count(), 0)
+
+    def test_login_during_an_exam_is_recorded_as_information_only(self):
+        from rest_framework.test import APIClient
+        r = APIClient().post("/api/auth/login/", {"username": "amina", "password": "pw-amina-1"}, format="json", HTTP_USER_AGENT=self.WINDOWS)
+        self.assertEqual(r.status_code, 200)
+        f = self.flags("login_during_exam").get()
+        self.assertEqual((f.severity, f.student_id, f.detail["platform"]), ("info", self.amina.pk, "Windows"))
+        self.assertEqual(Notification.objects.filter(kind="integrity_alert").count(), 0)  # information does not page the admins
+        # a student with no running attempt leaves no trace
+        Attempt.objects.filter(pk=self.a_zawadi.pk).update(status=Attempt.SUBMITTED)
+        APIClient().post("/api/auth/login/", {"username": "zawadi", "password": "pw-zawadi-1"}, format="json")
+        self.assertEqual(self.flags("login_during_exam").count(), 1)
+
+    def test_a_jump_to_another_place_is_flagged(self):
+        self.send(self.amina, self.a_amina, at(0, 0, acc=6))
+        self.send(self.amina, self.a_amina, at(8000, 0, acc=6))
+        f = self.flags("teleport").get()
+        self.assertEqual(f.severity, "high")
+        self.assertAlmostEqual(f.detail["distance_m"], 8000, delta=50)
+
+    def test_normal_walking_and_rough_fixes_are_not_a_jump(self):
+        self.send(self.amina, self.a_amina, at(0, 0, acc=6))
+        self.send(self.amina, self.a_amina, at(40, 0, acc=6))
+        self.send(self.amina, self.a_amina, at(5000, 0, acc=900))  # a rough network fix far away
+        self.assertEqual(self.flags("teleport").count(), 0)
+
+    def test_frozen_position_perfect_accuracy_and_typed_coordinates(self):
+        frozen = {"lat": LAT + 1.2345678e-5, "lng": LNG + 2.3456789e-5, "accuracy": 6.0}
+        for _ in range(9):
+            self.send(self.amina, self.a_amina, frozen)
+        self.assertEqual(self.flags("frozen_fix").get().detail["reports"], 8)
+        for i in range(3):
+            self.send(self.zawadi, self.a_zawadi, {"lat": LAT + i * 1e-6, "lng": LNG + i * 1.7e-6, "accuracy": 1.0})
+        self.assertEqual(self.flags("perfect_accuracy").get().student_id, self.zawadi.pk)
+        for _ in range(3):
+            self.send(self.neema, self.a_neema, {"lat": -6.8, "lng": 39.25, "accuracy": 10})
+        self.assertEqual(self.flags("rounded_coords").get().student_id, self.neema.pk)
+
+    def test_real_gps_drift_is_never_flagged(self):
+        for i in range(30):
+            self.send(self.amina, self.a_amina, at(math.sin(i) * 2.5, math.cos(i) * 2.5, acc=5 + (i % 4) * 0.8))
+        self.assertEqual(self.flags().count(), 0)
+
+    def test_a_second_episode_counts_and_shows_the_flag_again_after_review(self):
+        self.send(self.amina, self.a_amina, at(0, 0, acc=6))
+        self.send(self.amina, self.a_amina, at(8000, 0, acc=6))
+        f = self.flags("teleport").get()
+        r = self.client_for(self.admin).post(f"/api/proctoring/flags/{f.pk}/ack/")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(self.board()["flags"][0]["acknowledged"])
+        self.send(self.amina, self.a_amina, at(0, 0, acc=6))  # jumps back
+        f.refresh_from_db()
+        self.assertEqual(f.count, 2)
+        self.assertFalse(self.board()["flags"][0]["acknowledged"])  # the administrator sees it again
+        self.assertEqual(Notification.objects.filter(kind="integrity_alert").count(), 1)  # but is not paged twice
+
+    def test_only_admins_can_review_and_flags_never_block_the_exam(self):
+        self.send(self.amina, self.a_amina, at(0, 0, acc=6))
+        self.send(self.amina, self.a_amina, at(8000, 0, acc=6))
+        f = self.flags("teleport").get()
+        for who in (self.amina, self.teacher):
+            self.assertEqual(self.client_for(who).post(f"/api/proctoring/flags/{f.pk}/ack/").status_code, 403)
+        q = self.a_amina.order[self.a_amina.current_index]
+        self.assertEqual(self.client_for(self.amina).post(f"/api/attempts/{self.a_amina.pk}/answer/", {"question_id": q, "response": "A"}, format="json").status_code, 200)
+
+    def test_start_records_the_first_device(self):
+        Attempt.objects.all().delete()
+        now = timezone.now()
+        self.exam.start_at, self.exam.end_at = now - timedelta(minutes=1), now + timedelta(minutes=59)
+        self.exam.save()
+        r = self.client_for(self.amina).post(f"/api/student/exams/{self.exam.pk}/start/", {"agree_rules": True, "accept_legal": True, "location": at(),
+                                             "device": "dev-aaaa-1111"}, format="json", HTTP_USER_AGENT=self.ANDROID)
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(LiveLocation.objects.get(student=self.amina).devices["first"]["id"], "dev-aaaa-1111")
+
+
+class RelatedStudents(ProximityBase):
+    """Twins / same house / same room: shown with a line and a label, never alerted, never locked."""
+
+    def settings(self, **kw):
+        from core.models import SchoolSettings
+        s = SchoolSettings.load()
+        for k, v in kw.items():
+            setattr(s, k, v)
+        s.save()
+
+    def mark(self, ids, kind="twin", note="", who=None):
+        return self.client_for(who or self.admin).post("/api/proctoring/relations/", {"students": ids, "kind": kind, "note": note}, format="json")
+
+    def close_pair(self, d=5):
+        self.ping(self.amina, self.a_amina, at(0, 0))
+        return self.ping(self.zawadi, self.a_zawadi, at(d, 0))
+
+    def answer(self, user, attempt):
+        q = attempt.order[attempt.current_index]
+        return self.client_for(user).post(f"/api/attempts/{attempt.pk}/answer/", {"question_id": q, "response": "A"}, format="json")
+
+    def test_related_pair_gets_a_line_and_label_but_no_alert_and_no_lock(self):
+        self.settings(proximity_lock_enabled=True)
+        r = self.mark([self.zawadi.pk, self.amina.pk], "twin")
+        self.assertEqual((r.status_code, len(r.json()["results"])), (201, 1))
+        self.assertEqual(self.close_pair().json()["locked"], False)
+        self.assertFalse(ProximityAlert.objects.exists())
+        self.assertEqual(Notification.objects.filter(kind="integrity_alert").count(), 0)
+        b = self.board()
+        self.assertEqual(b["alerts"], [])
+        self.assertEqual(len(b["links"]), 1)
+        link = b["links"][0]
+        self.assertEqual((link["kind"], link["label"]), ("twin", "Twins"))
+        self.assertEqual({link["a"], link["b"]}, {self.amina.pk, self.zawadi.pk})
+        self.assertAlmostEqual(link["distance_m"], 5, delta=1)
+        self.assertEqual(self.answer(self.amina, self.a_amina).status_code, 200)
+
+    def test_the_line_only_shows_while_they_are_close_and_reporting(self):
+        self.mark([self.amina.pk, self.zawadi.pk], "house")
+        self.close_pair(d=300)
+        self.assertEqual(self.board()["links"], [])  # far apart: no line
+        self.ping(self.zawadi, self.a_zawadi, at(10, 0))
+        self.assertEqual(self.board()["links"][0]["label"], "Same house")
+        LiveLocation.objects.filter(attempt=self.a_zawadi).update(updated_at=timezone.now() - timedelta(minutes=10))
+        self.assertEqual(self.board()["links"], [])  # her position is old
+
+    def test_a_third_student_is_still_alerted(self):
+        self.mark([self.amina.pk, self.zawadi.pk], "room")
+        self.ping(self.amina, self.a_amina, at(0, 0))
+        self.ping(self.zawadi, self.a_zawadi, at(3, 0))
+        self.ping(self.neema, self.a_neema, at(6, 0))
+        als = ProximityAlert.objects.all()
+        self.assertEqual({frozenset((a.a_id, a.b_id)) for a in als}, {frozenset((self.amina.pk, self.neema.pk)), frozenset((self.zawadi.pk, self.neema.pk))})
+
+    def test_marking_ends_an_open_alert_and_releases_the_lock(self):
+        self.settings(proximity_lock_enabled=True)
+        self.close_pair()
+        self.assertEqual(self.answer(self.amina, self.a_amina).status_code, 423)
+        self.mark([self.amina.pk, self.zawadi.pk], "twin")
+        al = ProximityAlert.objects.get()
+        self.assertFalse(al.active)
+        self.assertIsNotNone(al.unlocked_at)
+        self.assertEqual(self.answer(self.amina, self.a_amina).status_code, 200)
+        self.assertEqual(self.answer(self.zawadi, self.a_zawadi).status_code, 200)
+        self.assertEqual(self.close_pair().json()["locked"], False)
+        self.assertEqual(ProximityAlert.objects.count(), 1)  # no new alert for the pair
+
+    def test_a_household_of_three_makes_three_pairs_and_updating_changes_the_kind(self):
+        r = self.mark([self.amina.pk, self.zawadi.pk, self.neema.pk], "house", note="same compound")
+        self.assertEqual(len(r.json()["results"]), 3)
+        self.assertEqual(self.mark([self.amina.pk, self.zawadi.pk], "twin").status_code, 201)
+        rows = self.client_for(self.admin).get("/api/proctoring/relations/").json()["results"]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual({r["kind"] for r in rows}, {"twin", "house"})
+        found = self.client_for(self.admin).get("/api/proctoring/relations/?q=S3").json()["results"]
+        self.assertEqual(len(found), 2)
+
+    def test_removing_the_relation_brings_alerts_back(self):
+        self.mark([self.amina.pk, self.zawadi.pk], "twin")
+        self.close_pair()
+        self.assertFalse(ProximityAlert.objects.exists())
+        rid = self.client_for(self.admin).get("/api/proctoring/relations/").json()["results"][0]["id"]
+        self.assertEqual(self.client_for(self.admin).delete(f"/api/proctoring/relations/{rid}/").status_code, 200)
+        self.ping(self.zawadi, self.a_zawadi, at(4, 0))
+        self.assertEqual(ProximityAlert.objects.count(), 1)
+
+    def test_validation_and_permissions(self):
+        for ids in ([self.amina.pk], [self.amina.pk, self.amina.pk], list(range(1, 11)), "x", None, [self.amina.pk, "z"]):
+            self.assertEqual(self.mark(ids).status_code, 400, ids)
+        self.assertEqual(self.mark([self.amina.pk, self.zawadi.pk], "cousins").status_code, 400)
+        self.assertEqual(self.mark([self.amina.pk, self.teacher.pk]).status_code, 400)  # only students
+        for who in (self.amina, self.teacher):
+            self.assertEqual(self.mark([self.amina.pk, self.zawadi.pk], who=who).status_code, 403)
+            self.assertEqual(self.client_for(who).get("/api/proctoring/relations/").status_code, 403)
+        self.assertEqual(self.client_for(self.amina).delete("/api/proctoring/relations/1/").status_code, 403)

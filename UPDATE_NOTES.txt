@@ -29,3 +29,84 @@ Rebuild the front end (npm run build); frontend/out is the old build.
 ==== Update 2: place names ====
 New: proctoring/geocode.py, GET /api/proctoring/place/, settings GEOCODER_URL / GEOCODER_USER_AGENT (GEOCODER_URL="" switches off). Privacy policy updated (LEGAL_VERSION 2026-10-28).
 Set GEOCODER_USER_AGENT or VAPID_CONTACT_EMAIL to a real contact (OpenStreetMap usage policy). Files: proctoring/{geocode,views,urls,tests,test_geo}.py config/settings.py frontend/components/AntiCheat.tsx frontend/app/privacy/page.tsx frontend/app/globals.css frontend/lib/site.ts docs/admin_guide.md
+
+==== Update: teacher submissions, exams list filters/sorting, live overview ====
+New migration (adds exam.submitted_at / submitted_by; teacher drafts that already have a paper are counted as submitted
+when created):   python manage.py migrate
+Tests:            python manage.py test exams     (193 tests pass in the whole project)
+API:   POST /api/exams/<id>/submit/   (teacher hands the saved paper to the admins; records who + when, audited as exam.submit)
+       GET  /api/overview/            (staff: live exams, submissions waiting, upcoming, results pending, online students, alerts, recent activity)
+       GET  /api/exams/               now also returns subject_name, class_names, created_by_name, submitted_at, submitted_by_name, awaiting_scheduling
+Changed / new files:
+  exams/models.py  exams/migrations/0002_exam_submission.py  exams/views.py  exams/urls.py  exams/tests.py
+  frontend/components/StaffOverview.tsx (new)  frontend/components/ExamBuilder.tsx  frontend/components/ExamForm.tsx
+  frontend/app/staff/page.tsx  frontend/app/staff/exams/page.tsx  frontend/lib/clock.ts  frontend/app/globals.css
+Rebuild the front end (npm run build); frontend/out is regenerated.
+
+==== Update: pagination on every list (no page reloads) ====
+API: any list accepts ?page=N&page_size=M (size 1-100). Reply: {count, page, pages, page_size, results}. Without ?page the old plain reply is
+     unchanged (older screens, the SMS app and the load tests keep working). A page past the end returns the last page.
+     Covered: students, teachers, admins, classes, subjects, assignments, years, terms, exams, questions (ViewSets, via core/pagination.py),
+     results, notifications (keeps "items" + "unread"), XP history, leaderboard ("entries"), audit log, parents, SMS messages, SMS phones,
+     analytics students. Audit log and parents also keep their old limit/offset and offset.
+Front end: components/Pager.tsx = <Pager>, usePaged() (server pages, rows stay on screen while the next page loads, filters go back to page 1,
+     background refreshes are silent), useClientPage() and <PagedList> (lists the screen already holds). Text in English and Kiswahili.
+     Pages changed: results, notifications, badges, leaderboard, review, staff home (subjects, exams, not-started), people (students/teachers/admins),
+     exams list, question bank, question bank in the exam builder (shares the same Pager), parents, SMS messages, SMS phones, audit log,
+     analytics (heat map, students, question analysis, left-screen list), school analytics, settings (classes, subjects, years).
+Tests: python manage.py test core.test_pagination
+Rebuild the front end (npm run build); frontend/out is the old build.
+Changed / new: core/pagination.py (new) core/test_pagination.py (new) config/settings.py core/views.py exams/views.py notifications/views.py
+     gamification/views.py guardians/views.py analytics/views.py + the front end files above (frontend/components/Pager.tsx new, lib/i18n.ts, app/globals.css)
+
+
+==== Update: anti-cheat distance in Settings + lock students who sit too close ====
+Run:  python manage.py migrate        (core 0002, proctoring 0002)
+Test: python manage.py test proctoring core exams
+PROXIMITY_ALERT_METERS in the environment is no longer used: the distance is Settings -> School -> Anti-cheat (default 20).
+API:  PATCH /api/settings/ now takes proximity_alert_meters (1-500) and proximity_lock_enabled (bool)
+      POST /api/proctoring/alerts/<id>/unlock/   POST /api/proctoring/exams/<id>/unlock-all/   (admins only)
+      location report, GET /api/attempts/<id>/ and the Anti-cheat board now say who is locked; answers while locked get 423 code "locked"
+Changed / new: core/models.py core/views.py core/migrations/0002_proximity_settings.py proctoring/{models,services,views,urls,tests}.py
+  proctoring/migrations/0002_proximity_lock.py exams/services.py exams/views.py docs/admin_guide.md
+  frontend/{lib/proctor.ts,lib/i18n.ts,lib/types.ts,app/exam/page.tsx,app/staff/settings/page.tsx,app/globals.css,components/AntiCheat.tsx}
+Rebuild the front end (npm run build); frontend/out is the old build.
+
+
+==== Update: device-change and fake-position checks ====
+Run:  python manage.py migrate        (proctoring 0003)
+Test: python manage.py test proctoring accounts exams      (proctoring.test_spoof also runs without a database)
+New:  proctoring/spoof.py, proctoring/test_spoof.py, proctoring/migrations/0003_integrity_flags.py, model IntegrityFlag
+API:  location report and exam start accept "device" (random browser code); the Anti-cheat board has "flags";
+      POST /api/proctoring/flags/<id>/ack/ (admins only)
+Changed: proctoring/{models,services,views,urls,tests}.py, proctoring/management/commands/purge_locations.py, accounts/views.py (login hook),
+  exams/views.py, config/settings.py (LEGAL_VERSION), docs/admin_guide.md,
+  frontend/{lib/proctor.ts,lib/site.ts,app/exam/page.tsx,app/privacy/page.tsx,app/terms/page.tsx,app/globals.css,components/AntiCheat.tsx}
+Rebuild the front end (npm run build).
+
+
+==== Update: related students (twins / house / room) and admin messages ====
+Run:  python manage.py migrate        (proctoring 0004, notifications 0002)
+Test: python manage.py test proctoring notifications.test_messages
+New:  StudentRelation (proctoring), AdminMessage (notifications)
+API:  GET/POST /api/proctoring/relations/   DELETE /api/proctoring/relations/<id>/        (admins)
+      the Anti-cheat board has "links" (related pairs that are close now)
+      GET /api/messages/ (own, ?banner=1)   POST /api/messages/<id>/dismiss/              (any signed-in account)
+      GET/POST /api/admin/messages/   DELETE /api/admin/messages/<id>/                    (admins)
+      the location report also returns "messages" (unseen count) so an exam screen shows the banner at once
+Front end: new pages /messages and /staff/messages; components MessageBanner, PersonPicker, SendMessage, RelatedStudents; Shell shows the banner
+Legal: Privacy policy has two new bullets, LEGAL_VERSION is 2026-10-29b
+Rebuild the front end (npm run build).
+
+
+==== Fix: integrity-check files missing + optional extra message in parents' SMS ====
+Run:  python manage.py migrate        (proctoring 0003, guardians 0002)
+Test: python manage.py test proctoring guardians accounts exams
+Fixes ImportError "cannot import name 'spoof' from 'proctoring'": proctoring/spoof.py, test_spoof.py and migration 0003_integrity_flags.py were missing
+(0004_student_relation depends on 0003). Also applied: login hook (accounts/views.py), device code at exam start (exams/views.py, exam/page.tsx),
+purge_locations flag clean-up, Terms wording. Your later work (related students, messages, LEGAL_VERSION) is kept.
+SMS: POST /api/guardians/send/ takes an optional "note" (max 160 chars, plain text). The dry run returns "preview" {text, parts, unicode}.
+  Stored on SmsJob.note so "Retry" keeps it. The phone app needs no change (it sends the finished text).
+Changed / new: guardians/{models,services,views,tests}.py guardians/migrations/0002_smsjob_note.py docs/PARENTS_SMS.md
+  frontend/app/staff/guardians/page.tsx  + the integrity files above
+Rebuild the front end (npm run build).

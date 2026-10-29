@@ -1,15 +1,29 @@
 "use client";
+import { Pager, useClientPage } from "@/components/Pager";
 import Shell from "@/components/Shell";
 import StaffNav from "@/components/StaffNav";
 import { Bar, ErrorNote, Loading, useLoad } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useSession } from "@/lib/session";
 
+function Participation({ exams }: { exams: any[] }) {
+  const pg = useClientPage(exams, 10);
+  return (
+    <>
+      <div className="tbl-wrap" ref={pg.top}><table><thead><tr><th>Exam</th><th>Took it</th><th>Eligible</th><th>Rate</th></tr></thead><tbody>
+        {pg.rows.map((x: any) => <tr key={x.exam_id}><td>{x.title}</td><td>{x.participants}</td><td>{x.eligible}</td><td>{x.rate ?? "–"}%</td></tr>)}</tbody></table></div>
+      <Pager {...pg.pager} onSize={undefined} />
+    </>
+  );
+}
+
 function Group({ title, rows }: { title: string; rows: any[] }) {
+  const pg = useClientPage(rows, 10);
   if (!rows?.length) return null;
   return (
     <div className="card"><h3>{title}</h3>
-      {rows.map((r) => <div key={String(r.key) + r.label} style={{ margin: ".6rem 0" }}><div className="row"><span className="grow">{r.label}</span><span className="muted small">{r.count} result(s) · pass {r.pass_rate ?? "–"}%</span><b>{r.average ?? "–"}%</b></div><Bar value={r.average || 0} label={`${title}: ${r.label}`} /></div>)}
+      <div ref={pg.top}>{pg.rows.map((r) => <div key={String(r.key) + r.label} style={{ margin: ".6rem 0" }}><div className="row"><span className="grow">{r.label}</span><span className="muted small">{r.count} result(s) · pass {r.pass_rate ?? "–"}%</span><b>{r.average ?? "–"}%</b></div><Bar value={r.average || 0} label={`${title}: ${r.label}`} /></div>)}</div>
+      <Pager {...pg.pager} onSize={undefined} />
     </div>
   );
 }
@@ -31,8 +45,7 @@ export default function SchoolAnalytics() {
                 <div className="stat"><b>{d.highest}%</b>Highest</div><div className="stat"><b>{d.lowest}%</b>Lowest</div><div className="stat"><b>{d.participation.overall_rate ?? "–"}%</b>Participation</div></div>
               <div className="card"><h3>Grade distribution</h3><p>{Object.entries(d.grade_distribution).map(([g, n]) => `${g}: ${n}`).join("   ")}</p></div>
               <Group title="By subject" rows={d.by_subject} /><Group title="By class" rows={d.by_class} /><Group title="By stream" rows={d.by_stream} /><Group title="By term" rows={d.by_term} />
-              <div className="card"><h3>Participation by exam</h3><div className="tbl-wrap"><table><thead><tr><th>Exam</th><th>Took it</th><th>Eligible</th><th>Rate</th></tr></thead><tbody>
-                {d.participation.exams.map((x: any) => <tr key={x.exam_id}><td>{x.title}</td><td>{x.participants}</td><td>{x.eligible}</td><td>{x.rate ?? "–"}%</td></tr>)}</tbody></table></div></div>
+              <div className="card"><h3>Participation by exam</h3><Participation exams={d.participation.exams} /></div>
             </>
           )}
           {e?.available && (

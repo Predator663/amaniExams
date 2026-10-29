@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Pager, useClientPage, usePaged } from "@/components/Pager";
 import Shell from "@/components/Shell";
 import { ErrorNote, Loading, Modal, Tabs, useLoad } from "@/components/ui";
 import { api, apiBase, downloadFile } from "@/lib/api";
@@ -12,9 +13,9 @@ const Msg = ({ err, ok }: { err?: string; ok?: string }) => <>{err && <p classNa
 
 /* ------------------------------------------------------------------------------------------- Parents */
 function Parents({ summary, classes, reload }: { summary: any; classes: any[]; reload: () => void }) {
-  const [q, setQ] = useState(""), [cls, setCls] = useState(""), [off, setOff] = useState(0);
+  const [q, setQ] = useState(""), [cls, setCls] = useState("");
   const [edit, setEdit] = useState<any>(null), [add, setAdd] = useState(false), [shown, setShown] = useState<Record<number, string>>({});
-  const list = useLoad(() => api<any>(`/guardians/?q=${encodeURIComponent(q)}&class=${cls}&offset=${off}`), [q, cls, off]);
+  const list = usePaged<any>("/guardians/", { q, class: cls }, { size: 20 });
   const [msg, setMsg] = useState({ err: "", ok: "" });
   const done = (ok: string) => { setMsg({ err: "", ok }); list.reload(); reload(); };
   const fail = (e: any) => setMsg({ err: e.message, ok: "" });
@@ -31,19 +32,19 @@ function Parents({ summary, classes, reload }: { summary: any; classes: any[]; r
       </div>
       <div className="card">
         <div className="row" style={{ flexWrap: "wrap", gap: ".6rem" }}>
-          <input className="input grow" type="search" placeholder="Search parent, child or phone" aria-label="Search" value={q} onChange={(e) => { setQ(e.target.value); setOff(0); }} />
-          <select className="input" aria-label="Class" value={cls} onChange={(e) => { setCls(e.target.value); setOff(0); }}><option value="">All classes</option>{classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+          <input className="input grow" type="search" placeholder="Search parent, child or phone" aria-label="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+          <select className="input" aria-label="Class" value={cls} onChange={(e) => setCls(e.target.value)}><option value="">All classes</option>{classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
           <button className="btn primary" onClick={() => setAdd(true)}>+ Add a parent</button>
         </div>
         <Msg {...msg} />
       </div>
-      {list.loading && !list.data ? <Loading /> : list.error ? <ErrorNote error={list.error} retry={list.reload} /> : !d.results.length ? (
+      {list.loading ? <Loading /> : list.error ? <ErrorNote error={list.error} retry={list.reload} /> : !list.rows.length ? (
         <div className="card"><p className="muted">{d.total || q || cls ? "No parents match." : "No parents yet. Use the Upload tab to add your list, or add one by hand."}</p></div>
       ) : (
         <>
-          <div className="tbl-wrap"><table>
+          <div className="tbl-wrap paged" ref={list.top} aria-busy={list.busy || undefined}><table>
             <thead><tr><th>Parent</th><th>Phone</th><th>Children</th><th>Last message</th><th></th></tr></thead>
-            <tbody>{d.results.map((g: any) => (
+            <tbody>{list.rows.map((g: any) => (
               <tr key={g.id}>
                 <td><b>{g.name}</b><br /><span className="muted small">{g.relationship || "—"}{g.has_whatsapp ? " · WhatsApp" : ""} · {g.language === "en" ? "English" : "Kiswahili"}</span></td>
                 <td><span className="mono">{shown[g.id] || g.phone}</span> {!shown[g.id] && <button className="btn ghost" onClick={() => reveal(g.id)} aria-label={`Show phone of ${g.name}`}>Show</button>}</td>
@@ -52,9 +53,8 @@ function Parents({ summary, classes, reload }: { summary: any; classes: any[]; r
                 <td><button className="btn" onClick={() => setEdit(g)}>Edit</button></td>
               </tr>))}</tbody>
           </table></div>
-          <div className="row"><span className="muted small grow">{d.offset + 1}–{Math.min(d.offset + d.results.length, d.total)} of {d.total}. ✓ = the child has already logged in.</span>
-            <button className="btn" disabled={off === 0} onClick={() => setOff(Math.max(0, off - 50))}>← Back</button>
-            <button className="btn" disabled={off + 50 >= d.total} onClick={() => setOff(off + 50)}>Next →</button></div>
+          <p className="muted small">✓ = the child has already logged in.</p>
+          <Pager {...list.pager} />
         </>
       )}
       {summary.without_parent?.length > 0 && (
@@ -154,15 +154,15 @@ function Upload({ reload, goParents }: { reload: () => void; goParents: () => vo
 
 /* ------------------------------------------------------------------------------------------- Send */
 function Send({ summary, classes, reload }: { summary: any; classes: any[]; reload: () => void }) {
-  const [scope, setScope] = useState("all"), [cls, setCls] = useState(""), [resend, setResend] = useState(false), [plan, setPlan] = useState<any>(null), [msg, setMsg] = useState({ err: "", ok: "" });
+  const [scope, setScope] = useState("all"), [cls, setCls] = useState(""), [resend, setResend] = useState(false), [note, setNote] = useState(""), [plan, setPlan] = useState<any>(null), [msg, setMsg] = useState({ err: "", ok: "" });
   const [filter, setFilter] = useState("");
-  const jobs = useLoad(() => api<any[]>(`/guardians/jobs/${filter ? `?status=${filter}` : ""}`), [filter]);
-  const body = { scope, class_id: scope === "class" ? Number(cls) : undefined, resend };
+  const jobs = usePaged<any>("/guardians/jobs/", { status: filter }, { size: 20 });
+  const body = { scope, class_id: scope === "class" ? Number(cls) : undefined, resend, note: note.trim() };
   const open = (summary.jobs.queued || 0) + (summary.jobs.sending || 0);
   useEffect(() => { if (!open) return; const i = setInterval(() => { jobs.reload(); reload(); }, 5000); return () => clearInterval(i); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   async function check() { setMsg({ err: "", ok: "" }); try { setPlan(await api("/guardians/send/", { body })); } catch (e: any) { setPlan(null); setMsg({ err: e.message, ok: "" }); } }
   async function queue() {
-    try { const r = await api<any>("/guardians/send/", { body: { ...body, dry_run: false } }); setPlan(null); setMsg({ err: "", ok: `${r.queued} messages are waiting for the phone to send them.` }); jobs.reload(); reload(); } catch (e: any) { setMsg({ err: e.message, ok: "" }); }
+    try { const r = await api<any>("/guardians/send/", { body: { ...body, dry_run: false } }); setPlan(null); setNote(""); setMsg({ err: "", ok: `${r.queued} messages are waiting for the phone to send them.` }); jobs.reload(); reload(); } catch (e: any) { setMsg({ err: e.message, ok: "" }); }
   }
   const act = async (fn: () => Promise<any>, ok: (r: any) => string) => { try { const r = await fn(); setMsg({ err: "", ok: ok(r) }); jobs.reload(); reload(); } catch (e: any) { setMsg({ err: e.message, ok: "" }); } };
   const sk = plan?.skipped || {};
@@ -177,12 +177,24 @@ function Send({ summary, classes, reload }: { summary: any; classes: any[]; relo
           {scope === "class" && <label className="field"><span>Class</span><select className="input" value={cls} onChange={(e) => { setCls(e.target.value); setPlan(null); }}><option value="">Choose…</option>{classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
         </div>
         <label className="row"><input type="checkbox" checked={resend} onChange={(e) => { setResend(e.target.checked); setPlan(null); }} /> Also send again to children who already have a message or have logged in (this gives them a NEW password)</label>
+        <label className="field" style={{ marginTop: ".6rem" }}>
+          <span>Extra message (optional)</span>
+          <textarea className="input" rows={2} maxLength={160} value={note} placeholder="For example: Parents' meeting on Friday 7 November, 9:00 am, at school." onChange={(e) => { setNote(e.target.value); setPlan(null); }} />
+          <small className="muted">{note.length}/160. Added as the last line of every message, after the login details. Leave it empty to send only the login details. A longer text may use more than one SMS.</small>
+        </label>
         <div className="row" style={{ marginTop: ".6rem" }}><button className="btn" disabled={scope === "class" && !cls} onClick={check}>Check who will get a message</button></div>
         <Msg {...msg} />
         {plan && (
           <div className="hint">
             <p><b>{plan.messages}</b> messages for <b>{plan.students}</b> children.</p>
             <p className="small muted">Skipped: {sk.already_logged_in || 0} already logged in · {sk.already_sent || 0} already sent · {sk.no_children || 0} parents with no child · {sk.inactive || 0} inactive.</p>
+            {plan.preview?.text && (
+              <>
+                <p className="small muted" style={{ marginBottom: ".2rem" }}>Example of one message (the password is hidden here){plan.preview.parts > 1 ? ` — uses ${plan.preview.parts} SMS` : ""}:</p>
+                <pre className="sms-preview" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: ".2rem 0 .6rem", padding: ".6rem .8rem", border: "1px solid var(--line,#c9d1de)", borderRadius: 10 }}>{plan.preview.text}</pre>
+                {plan.preview.unicode && <p className="warn" role="status">⚠ The extra message has a character (such as an emoji) that makes each SMS shorter and costs more. Use plain letters to keep it cheap.</p>}
+              </>
+            )}
             <button className="btn primary big" disabled={!plan.messages} onClick={() => confirm(`Queue ${plan.messages} messages? ${plan.students} children get new passwords.`) && queue()}>Queue {plan.messages} messages</button>
           </div>
         )}
@@ -199,12 +211,13 @@ function Send({ summary, classes, reload }: { summary: any; classes: any[]; relo
           {(["queued", "sent", "failed"] as const).map((k) => <div key={k} className="stat"><b>{k === "sent" ? (summary.jobs.sent || 0) + (summary.jobs.delivered || 0) : (summary.jobs[k] || 0) + (k === "queued" ? summary.jobs.sending || 0 : 0)}</b><span>{k === "queued" ? "Waiting" : k === "sent" ? "Sent" : "Failed"}</span></div>)}
         </div>
       </div>
-      {jobs.loading && !jobs.data ? <Loading /> : jobs.error ? <ErrorNote error={jobs.error} retry={jobs.reload} /> : !jobs.data!.length ? <p className="muted">No messages yet.</p> : (
-        <div className="tbl-wrap"><table><thead><tr><th>Parent</th><th>Children</th><th>Status</th><th>Time</th><th></th></tr></thead><tbody>
-          {jobs.data!.map((j) => (<tr key={j.id}><td><b>{j.parent}</b><br /><span className="mono small">{j.phone}</span></td><td className="small">{j.summary.replace("Login details for ", "")}</td>
+      {jobs.loading ? <Loading /> : jobs.error ? <ErrorNote error={jobs.error} retry={jobs.reload} /> : !jobs.rows.length ? <p className="muted">No messages yet.</p> : (
+        <><div className="tbl-wrap paged" ref={jobs.top} aria-busy={jobs.busy || undefined}><table><thead><tr><th>Parent</th><th>Children</th><th>Status</th><th>Time</th><th></th></tr></thead><tbody>
+          {jobs.rows.map((j) => (<tr key={j.id}><td><b>{j.parent}</b><br /><span className="mono small">{j.phone}</span></td><td className="small">{j.summary.replace("Login details for ", "")}</td>
             <td><Status s={j.status} />{j.error && <div className="no small">{j.error}</div>}{j.attempts > 1 && <div className="muted small">tries: {j.attempts}</div>}</td><td className="small">{when(j.sent_at || j.created_at)}</td>
             <td>{(j.status === "failed" || j.status === "cancelled") && <button className="btn" onClick={() => act(() => api(`/guardians/jobs/${j.id}/retry/`, { body: {} }), () => "Queued again.")}>{j.status === "failed" ? "Retry" : "Send again"}</button>}</td></tr>))}
         </tbody></table></div>
+        <Pager {...jobs.pager} /></>
       )}
     </>
   );
@@ -212,7 +225,7 @@ function Send({ summary, classes, reload }: { summary: any; classes: any[]; relo
 
 /* ------------------------------------------------------------------------------------------- Phone */
 function Phone({ reload }: { reload: () => void }) {
-  const devices = useLoad(() => api<any[]>("/guardians/devices/"));
+  const devices = usePaged<any>("/guardians/devices/", {}, { size: 10 });
   const cfg = useLoad(() => api<any>("/guardians/config/"));
   const [name, setName] = useState("School phone"), [made, setMade] = useState<any>(null), [msg, setMsg] = useState({ err: "", ok: "" }), [f, setF] = useState<any>(null);
   useEffect(() => { if (cfg.data) setF(cfg.data); }, [cfg.data]);
@@ -243,12 +256,13 @@ function Phone({ reload }: { reload: () => void }) {
         <div className="row"><input className="input grow" aria-label="Phone name" value={name} onChange={(e) => setName(e.target.value)} />
           <button className="btn primary" onClick={async () => { try { setMade(await api("/guardians/devices/", { body: { name } })); devices.reload(); reload(); } catch (e: any) { setMsg({ err: e.message, ok: "" }); } }}>Create pairing code</button></div>
       </div>
-      {devices.loading && !devices.data ? <Loading /> : devices.error ? <ErrorNote error={devices.error} retry={devices.reload} /> : (
-        <div className="tbl-wrap"><table><thead><tr><th>Phone</th><th>Status</th><th>Last seen</th><th>Messages sent</th><th></th></tr></thead><tbody>
-          {!devices.data!.length && <tr><td colSpan={5} className="muted">No phone paired yet.</td></tr>}
-          {devices.data!.map((d) => (<tr key={d.id}><td><b>{d.name}</b></td><td>{d.online ? <span className="pill st-delivered">● online</span> : <span className="pill st-failed">○ offline</span>}</td><td className="small">{d.last_seen ? when(d.last_seen) : "never"}</td><td>{d.sent}</td>
+      {devices.loading ? <Loading /> : devices.error ? <ErrorNote error={devices.error} retry={devices.reload} /> : (
+        <><div className="tbl-wrap"><table><thead><tr><th>Phone</th><th>Status</th><th>Last seen</th><th>Messages sent</th><th></th></tr></thead><tbody>
+          {!devices.rows.length && <tr><td colSpan={5} className="muted">No phone paired yet.</td></tr>}
+          {devices.rows.map((d) => (<tr key={d.id}><td><b>{d.name}</b></td><td>{d.online ? <span className="pill st-delivered">● online</span> : <span className="pill st-failed">○ offline</span>}</td><td className="small">{d.last_seen ? when(d.last_seen) : "never"}</td><td>{d.sent}</td>
             <td><button className="btn danger" onClick={() => confirm(`Remove ${d.name}? It will stop sending.`) && api(`/guardians/devices/${d.id}/`, { method: "DELETE" }).then(() => { devices.reload(); reload(); })}>Remove</button></td></tr>))}
         </tbody></table></div>
+        <Pager {...devices.pager} onSize={undefined} /></>
       )}
       {made && (
         <Modal label="Pairing code" onClose={() => setMade(null)}>

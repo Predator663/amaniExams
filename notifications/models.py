@@ -48,3 +48,19 @@ class PushSubscription(models.Model):
     p256dh = models.CharField(max_length=200)
     auth = models.CharField(max_length=100)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class AdminMessage(models.Model):
+    """A message an administrator sends to one account (a student or a teacher). It shows as a banner at the top of the screen until
+    the person taps it away (`dismissed_at`), and then stays in her Messages tab until an administrator deletes it, which removes it
+    for her as well. She cannot delete it herself."""
+
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="admin_messages")
+    sender = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    body = models.TextField(max_length=1000)
+    created_at = models.DateTimeField(auto_now_add=True)
+    dismissed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["recipient", "dismissed_at"], name="msg_recipient_dismissed")]

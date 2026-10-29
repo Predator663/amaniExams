@@ -1,7 +1,9 @@
 "use client";
 import { useState } from "react";
+import { PagedList, Pager, useClientPage } from "@/components/Pager";
 import Shell from "@/components/Shell";
 import StaffNav from "@/components/StaffNav";
+import StaffOverview from "@/components/StaffOverview";
 import { Bar, ErrorNote, Loading, useLoad, Tabs } from "@/components/ui";
 import { api, downloadFile } from "@/lib/api";
 import { eatDate } from "@/lib/clock";
@@ -16,11 +18,12 @@ function Subjects() {
   const [open, setOpen] = useState<number | null>(null);
   const list = useLoad(() => api<any[]>("/analytics/subjects/"));
   const dash = useLoad(() => (open ? api<any>(`/analytics/subjects/${open}/`) : Promise.resolve(null)), [open]);
+  const pg = useClientPage(list.data, 8);
   if (list.loading) return <Loading />;
   if (list.error) return <ErrorNote error={list.error} retry={list.reload} />;
   return (
     <>
-      {list.data!.map((s) => (
+      <div ref={pg.top}>{pg.rows.map((s) => (
         <div key={s.id} className="card">
           <div className="row"><b className="grow">{s.name}</b><button className="btn" onClick={() => setOpen(open === s.id ? null : s.id)}>{open === s.id ? t("close") : t("details")}</button></div>
           <p className="muted">{s.count ? `${t("average")}: ${s.average}% · ${t("pass_rate")}: ${s.pass_rate}% · ${t("highest")}: ${s.highest}% · ${t("lowest")}: ${s.lowest}%` : t("no_results")}</p>
@@ -34,7 +37,8 @@ function Subjects() {
             </>
           )}
         </div>
-      ))}
+      ))}</div>
+      <Pager {...pg.pager} />
     </>
   );
 }
@@ -44,11 +48,12 @@ function Exams({ admin }: { admin: boolean }) {
   const [open, setOpen] = useState<number | null>(null);
   const list = useLoad(() => api<any[]>("/exams/"));
   const mon = useLoad(() => (open ? api<any>(`/exams/${open}/monitor/`) : Promise.resolve(null)), [open]);
+  const pg = useClientPage(list.data, 8);
   if (list.loading) return <Loading />;
   if (list.error) return <ErrorNote error={list.error} retry={list.reload} />;
   return (
     <>
-      {list.data!.map((e) => (
+      <div ref={pg.top}>{pg.rows.map((e) => (
         <div key={e.id} className="card">
           <div className="row"><span className="grow"><b>{e.title}</b><br /><span className="muted small">{e.start_at ? eatDate(e.start_at, undefined, lang) : "—"} · {e.status} · {e.question_count} {t("questions")}</span></span>
             <button className="btn" onClick={() => setOpen(open === e.id ? null : e.id)}>{open === e.id ? t("close") : t("monitor")}</button>{e.status === "live" && <a className="btn primary" href={`/staff/monitor/?exam=${e.id}`}>Live monitor</a>}</div>
@@ -60,12 +65,13 @@ function Exams({ admin }: { admin: boolean }) {
                 <div className="stat"><b>{mon.data.submitted}</b>{t("submitted")}</div>
               </div>
               <button className="btn" onClick={mon.reload}>↻ {t("refresh")}</button>
-              {admin && mon.data.not_started_students?.length > 0 && <><h3>{t("not_started")}</h3><ul className="list">{mon.data.not_started_students.map((s: any) => <li key={s.id}>{s.name} · {s.class}</li>)}</ul></>}
-              {admin && mon.data.connection_problems?.length > 0 && <><h3>📡 {t("connection_problems")}</h3><ul className="list">{mon.data.connection_problems.map((s: any) => <li key={s.id}>{s.name}</li>)}</ul></>}
+              {admin && mon.data.not_started_students?.length > 0 && <><h3>{t("not_started")}</h3><PagedList items={mon.data.not_started_students} size={10} render={(s: any) => <li key={s.id}>{s.name} · {s.class}</li>} /></>}
+              {admin && mon.data.connection_problems?.length > 0 && <><h3>📡 {t("connection_problems")}</h3><PagedList items={mon.data.connection_problems} size={10} render={(s: any) => <li key={s.id}>{s.name}</li>} /></>}
             </>
           )}
         </div>
-      ))}
+      ))}</div>
+      <Pager {...pg.pager} />
     </>
   );
 }
@@ -128,15 +134,16 @@ function Announce() {
 
 export default function Staff() {
   const { user, t, logout } = useSession();
-  const [tab, setTab] = useState("subjects");
+  const [tab, setTab] = useState("overview");
   const admin = user?.role === "admin" || user?.role === "super_admin";
-  const tabs = [["subjects", t("subjects")], ["exams", t("nav_exams")], ...(admin ? [["students", t("students")], ["announce", t("announcements")]] : [])];
+  const tabs = [["overview", "Overview"], ["subjects", t("subjects")], ["exams", t("nav_exams")], ...(admin ? [["students", t("students")], ["announce", t("announcements")]] : [])];
   return (
     <Shell bare title={t("staff_console")}>
       {user && user.role === "student" ? <p>{t("not_allowed")}</p> : (
         <>
           <StaffNav />
           <Tabs tabs={tabs} value={tab} onChange={setTab} />
+          {tab === "overview" && <StaffOverview />}
           {tab === "subjects" && <Subjects />}
           {tab === "exams" && <Exams admin={admin} />}
           {tab === "students" && admin && <BulkUpload />}

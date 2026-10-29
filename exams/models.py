@@ -29,6 +29,11 @@ class Exam(models.Model):
     status = models.CharField(max_length=10, choices=STATUSES, default=DRAFT)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
+    # When a teacher hands a finished paper to the administrators for scheduling (a draft stays a draft until an admin
+    # sets the date and classes). Kept after scheduling so the admin console can still show who submitted what and when.
+    submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    submitted_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                     related_name="+")
 
     class Meta:
         ordering = ["start_at"]
