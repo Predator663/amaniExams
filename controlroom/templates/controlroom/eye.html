@@ -1,0 +1,36 @@
+{% extends "controlroom/base.html" %}
+{% block cr %}<h1>God's Eye <span class="muted" id="t"></span></h1>
+<div class="grid" id="cards"></div>
+<h2>Online now</h2><div class="scroll"><table id="online"></table></div>
+<h2>SMS queue</h2><div id="sms" class="muted"></div>
+<h2>Project audit trail <span class="muted" id="auditname"></span></h2><div class="scroll"><table id="audit"></table></div>
+<h2>Recent sign-ins</h2><div class="scroll"><table id="logins"></table></div>
+<h2>Admin changes</h2><div class="scroll"><table id="alog"></table></div>
+<h2>Row counts</h2><div class="scroll"><table id="counts"></table></div>
+<script>
+(function(){
+var URL="{% url 'controlroom:eye_data' %}";
+function el(tag,txt,href){var e=document.createElement(href?'a':tag);if(href)e.href=href;e.textContent=txt==null?'':txt;return e}
+function fill(id,head,rows){var t=document.getElementById(id);t.textContent='';var tr=document.createElement('tr');
+ head.forEach(function(h){tr.appendChild(el('th',h))});t.appendChild(tr);
+ rows.forEach(function(r){var x=document.createElement('tr');r.forEach(function(c){var td=document.createElement('td');
+  if(c&&c.href){td.appendChild(el('a',c.text,c.href))}else{td.textContent=c==null?'':c}x.appendChild(td)});t.appendChild(x)})}
+function card(k,v){var d=document.createElement('div');d.className='card';var b=el('div',v);b.className='big';var m=el('div',k);m.className='muted';d.appendChild(b);d.appendChild(m);return d}
+function fmt(s){return s?new Date(s).toLocaleString():''}
+function render(d){
+ document.getElementById('t').textContent='updated '+fmt(d.time);
+ var c=document.getElementById('cards');c.textContent='';
+ c.appendChild(card('Online now',d.online.length));c.appendChild(card('Accounts',d.users.total));
+ c.appendChild(card('Active accounts',d.users.active));c.appendChild(card('Superusers',d.users.superusers));
+ fill('online',['User','Name','Role','Last login'],d.online.map(function(u){return [u.user,u.name,u.role,fmt(u.last_login)]}));
+ document.getElementById('sms').textContent=d.sms?Object.keys(d.sms).map(function(k){return (k||'?')+': '+d.sms[k]}).join('  ·  '):'No SMS table.';
+ if(d.audit){document.getElementById('auditname').textContent=d.audit.model;
+  fill('audit',['#','Entry','Details'],d.audit.rows.map(function(r){return [r.id,r.label,Object.keys(r.values).map(function(k){return k+'='+r.values[k]}).join(' | ')]}))}
+ fill('logins',['User','When'],d.recent_logins.map(function(r){return [r.user,fmt(r.at)]}));
+ fill('alog',['When','User','What'],d.admin_log.map(function(r){return [fmt(r.at),r.user,r.what]}));
+ fill('counts',['Table','Rows'],d.counts.map(function(r){return [{text:r.label,href:"{% url 'controlroom:tables' %}"+r.label+"/"},r.count]}));
+}
+function load(){fetch(URL,{credentials:'same-origin'}).then(function(r){return r.json()}).then(render).catch(function(){})}
+load();setInterval(load,10000);
+})();
+</script>{% endblock %}

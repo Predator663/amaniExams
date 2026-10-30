@@ -35,3 +35,12 @@ details to the parent as an SMS from the school phone.
   messages at once.
 - WhatsApp: automatic WhatsApp needs the paid WhatsApp Business service, so only SMS is sent automatically. The
   "uses WhatsApp" flag is stored for a later one-tap feature.
+
+## Linking parents while uploading students
+The **student** template has optional columns `parent name, parent phone, parent relationship` (and the same three for `parent 2`). Students and their parents are then created and linked in one step; the SMS steps below work unchanged. A parent is identified by the phone number, so brothers and sisters on different rows with the same number share one parent, and a parent registered earlier is reused. The separate parents' template still works for parents of students who already exist.
+
+## Editing the message, or sending only your own text
+On the **Send** tab:
+- The standard login message (Kiswahili and English) is shown in a box you can edit. Keep `{children}` (one line per child: name, user name, password) and `{url}` (the school web address); everything else is yours to change. **Restore the standard wording** puts the original back. Each parent gets the language saved on their record.
+- Untick **Include the login details** to send only your own message (up to 459 characters, 3 SMS). No password is created or changed, children are not marked as "already sent", and the school web address is not needed. Use it for meetings, reminders or announcements.
+- The optional "extra message" (160 characters) is still added as the last line when login details are included.

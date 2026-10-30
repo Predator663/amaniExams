@@ -37,16 +37,19 @@ INSTALLED_APPS = [
     "gamification",
     "guardians",
     "proctoring",
+    "controlroom",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    "controlroom.middleware.MaintenanceMiddleware",  # site-wide maintenance switch; after CORS so its 503 reaches the web app
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "controlroom.middleware.OwnerOnlyMiddleware",  # while the site is in maintenance, only the owner may open /django-admin/
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -142,6 +145,10 @@ REST_FRAMEWORK = {
 # Generate keys with:  pip install pywebpush && vapid --gen   (or any VAPID key tool)
 # Secret that encrypts parents' names and phone numbers. Not stored in the database. See guardians/crypto.py.
 GUARDIAN_KEY = os.environ.get("GUARDIAN_KEY", "")
+
+# Control room (/controlroom/, maintenance mode + God's Eye). Comma-separated user names of the owner(s): only they can get in while the
+# site is in maintenance. Empty = any superuser. Optional CONTROLROOM_EXEMPT_PREFIXES = paths that stay up (e.g. ["/api/sms/"] for the SMS phone).
+CONTROLROOM_OWNERS = os.environ.get("CONTROLROOM_OWNERS", "")
 
 # Anti-cheat: proximity monitoring during exams (see proctoring/ and the Privacy policy section on location).
 PROCTORING_ENABLED = os.environ.get("PROCTORING_ENABLED", "1") == "1"

@@ -1,0 +1,8 @@
+{% extends "controlroom/base.html" %}
+{% block cr %}<h1>{{ title }} <span class="muted">{{ label }} &middot; {{ total }} rows</span></h1>
+<form method="get"><input type="text" name="q" value="{{ q }}" placeholder="Search text columns" style="max-width:320px"> <button class="safe" style="padding:6px 12px">Search</button></form>
+<div class="scroll"><table><tr>{% for c in cols %}<th>{{ c }}</th>{% endfor %}</tr>
+{% for r in rows %}<tr>{% for v in r %}<td>{{ v }}</td>{% endfor %}</tr>{% empty %}<tr><td>No rows.</td></tr>{% endfor %}</table></div>
+<p>Page {{ page }} / {{ pages }}
+{% if page > 1 %}<a href="?q={{ q|urlencode }}&page={{ page|add:'-1' }}">&laquo; Prev</a>{% endif %}
+{% if page < pages %}<a href="?q={{ q|urlencode }}&page={{ page|add:'1' }}">Next &raquo;</a>{% endif %}</p>{% endblock %}

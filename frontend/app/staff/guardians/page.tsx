@@ -155,9 +155,17 @@ function Upload({ reload, goParents }: { reload: () => void; goParents: () => vo
 /* ------------------------------------------------------------------------------------------- Send */
 function Send({ summary, classes, reload }: { summary: any; classes: any[]; reload: () => void }) {
   const [scope, setScope] = useState("all"), [cls, setCls] = useState(""), [resend, setResend] = useState(false), [note, setNote] = useState(""), [plan, setPlan] = useState<any>(null), [msg, setMsg] = useState({ err: "", ok: "" });
+  const defaults: Record<string, string> = summary.default_messages || {};
+  const [includeLogin, setIncludeLogin] = useState(true), [lang, setLang] = useState<"sw" | "en">("sw");
+  const [wording, setWording] = useState<Record<string, string | undefined>>({});  // what the administrator edited; untouched = the standard wording
+  const text = (l: string) => wording[l] ?? defaults[l] ?? "";
+  const edited = (l: string) => wording[l] !== undefined && wording[l] !== defaults[l];
+  const noteMax = includeLogin ? 160 : 459;
   const [filter, setFilter] = useState("");
   const jobs = usePaged<any>("/guardians/jobs/", { status: filter }, { size: 20 });
-  const body = { scope, class_id: scope === "class" ? Number(cls) : undefined, resend, note: note.trim() };
+  const body = { scope, class_id: scope === "class" ? Number(cls) : undefined, resend: includeLogin && resend, note: note.trim(), include_login: includeLogin,
+    ...(includeLogin ? { message_sw: text("sw"), message_en: text("en") } : {}) };
+  const missingChildren = includeLogin && (!text("sw").includes("{children}") || !text("en").includes("{children}"));
   const open = (summary.jobs.queued || 0) + (summary.jobs.sending || 0);
   useEffect(() => { if (!open) return; const i = setInterval(() => { jobs.reload(); reload(); }, 5000); return () => clearInterval(i); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   async function check() { setMsg({ err: "", ok: "" }); try { setPlan(await api("/guardians/send/", { body })); } catch (e: any) { setPlan(null); setMsg({ err: e.message, ok: "" }); } }
@@ -169,33 +177,50 @@ function Send({ summary, classes, reload }: { summary: any; classes: any[]; relo
   return (
     <>
       <div className="card">
-        <h3>Send login details to parents</h3>
-        <p className="muted">One text message per parent, sent by your school phone. <b>Every child gets a new random password</b> (not her index number) and must choose her own at the first login. Children who have already logged in, or who were already sent a message, are skipped.</p>
+        <h3>Send a message to parents</h3>
+        <p className="muted">One text message per parent, sent by your school phone. {includeLogin
+          ? <><b>Every child gets a new random password</b> (not her index number) and must choose her own at the first login. Children who have already logged in, or who were already sent a message, are skipped.</>
+          : <>Only your own text is sent. <b>No password is created or changed</b>, and nobody is skipped because of an earlier message.</>}</p>
         {!summary.phone_online && <p className="warn" role="status">⚠ No school phone is online. Messages will wait until the phone app is open (see the Phone tab).</p>}
         <div className="grid2">
           <label className="field"><span>Send to</span><select className="input" value={scope} onChange={(e) => { setScope(e.target.value); setPlan(null); }}><option value="all">All parents</option><option value="class">Parents of one class</option></select></label>
           {scope === "class" && <label className="field"><span>Class</span><select className="input" value={cls} onChange={(e) => { setCls(e.target.value); setPlan(null); }}><option value="">Choose…</option>{classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
         </div>
-        <label className="row"><input type="checkbox" checked={resend} onChange={(e) => { setResend(e.target.checked); setPlan(null); }} /> Also send again to children who already have a message or have logged in (this gives them a NEW password)</label>
+        <label className="row" style={{ marginTop: ".4rem" }}><input type="checkbox" checked={includeLogin} onChange={(e) => { setIncludeLogin(e.target.checked); setPlan(null); }} /> <b>Include the login details</b> (child's user name and a new password). Untick to send only your own message.</label>
+        {includeLogin && (
+          <>
+            <label className="row"><input type="checkbox" checked={resend} onChange={(e) => { setResend(e.target.checked); setPlan(null); }} /> Also send again to children who already have a message or have logged in (this gives them a NEW password)</label>
+            <div className="field" style={{ marginTop: ".6rem" }}>
+              <span>Message with the login details</span>
+              <div className="row" role="tablist" aria-label="Language of the message">
+                {([["sw", "Kiswahili"], ["en", "English"]] as const).map(([k, n]) => <button key={k} type="button" role="tab" aria-selected={lang === k} className={"btn" + (lang === k ? " primary" : "")} onClick={() => setLang(k)}>{n}{edited(k) ? " ✎" : ""}</button>)}
+              </div>
+              <textarea className="input" rows={5} value={text(lang)} aria-label="Message wording" onChange={(e) => { setWording({ ...wording, [lang]: e.target.value }); setPlan(null); }} />
+              <small className="muted">Each parent gets the language set on their record. Keep <code>{"{children}"}</code> (one line per child: name, user name, password) and <code>{"{url}"}</code> (the school web address); change the rest as you like.</small>
+              {edited(lang) && <div><button type="button" className="btn small" onClick={() => { setWording({ ...wording, [lang]: undefined }); setPlan(null); }}>Restore the standard wording</button></div>}
+              {missingChildren && <p className="warn" role="alert">⚠ Both messages must contain {"{children}"}, or parents would not receive the login details.</p>}
+            </div>
+          </>
+        )}
         <label className="field" style={{ marginTop: ".6rem" }}>
-          <span>Extra message (optional)</span>
-          <textarea className="input" rows={2} maxLength={160} value={note} placeholder="For example: Parents' meeting on Friday 7 November, 9:00 am, at school." onChange={(e) => { setNote(e.target.value); setPlan(null); }} />
-          <small className="muted">{note.length}/160. Added as the last line of every message, after the login details. Leave it empty to send only the login details. A longer text may use more than one SMS.</small>
+          <span>{includeLogin ? "Extra message (optional)" : "Your message"}</span>
+          <textarea className="input" rows={includeLogin ? 2 : 4} maxLength={noteMax} value={note} placeholder="For example: Parents' meeting on Friday 7 November, 9:00 am, at school." onChange={(e) => { setNote(e.target.value); setPlan(null); }} />
+          <small className="muted">{note.length}/{noteMax}. {includeLogin ? "Added as the last line of every message, after the login details. Leave it empty to send only the login details." : "This is the whole SMS, sent as you wrote it."} A longer text may use more than one SMS.</small>
         </label>
-        <div className="row" style={{ marginTop: ".6rem" }}><button className="btn" disabled={scope === "class" && !cls} onClick={check}>Check who will get a message</button></div>
+        <div className="row" style={{ marginTop: ".6rem" }}><button className="btn" disabled={(scope === "class" && !cls) || missingChildren || (!includeLogin && !note.trim())} onClick={check}>Check who will get a message</button></div>
         <Msg {...msg} />
         {plan && (
           <div className="hint">
             <p><b>{plan.messages}</b> messages for <b>{plan.students}</b> children.</p>
-            <p className="small muted">Skipped: {sk.already_logged_in || 0} already logged in · {sk.already_sent || 0} already sent · {sk.no_children || 0} parents with no child · {sk.inactive || 0} inactive.</p>
+            <p className="small muted">Skipped: {includeLogin ? `${sk.already_logged_in || 0} already logged in · ${sk.already_sent || 0} already sent · ` : ""}{sk.no_children || 0} parents with no child · {sk.inactive || 0} inactive.</p>
             {plan.preview?.text && (
               <>
-                <p className="small muted" style={{ marginBottom: ".2rem" }}>Example of one message (the password is hidden here){plan.preview.parts > 1 ? ` — uses ${plan.preview.parts} SMS` : ""}:</p>
+                <p className="small muted" style={{ marginBottom: ".2rem" }}>Example of one message{plan.login === false ? "" : " (the password is hidden here)"}{plan.preview.parts > 1 ? ` — uses ${plan.preview.parts} SMS` : ""}:</p>
                 <pre className="sms-preview" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: ".2rem 0 .6rem", padding: ".6rem .8rem", border: "1px solid var(--line,#c9d1de)", borderRadius: 10 }}>{plan.preview.text}</pre>
-                {plan.preview.unicode && <p className="warn" role="status">⚠ The extra message has a character (such as an emoji) that makes each SMS shorter and costs more. Use plain letters to keep it cheap.</p>}
+                {plan.preview.unicode && <p className="warn" role="status">⚠ The message has a character (such as an emoji) that makes each SMS shorter and costs more. Use plain letters to keep it cheap.</p>}
               </>
             )}
-            <button className="btn primary big" disabled={!plan.messages} onClick={() => confirm(`Queue ${plan.messages} messages? ${plan.students} children get new passwords.`) && queue()}>Queue {plan.messages} messages</button>
+            <button className="btn primary big" disabled={!plan.messages} onClick={() => confirm(plan.login === false ? `Queue ${plan.messages} messages? No passwords change.` : `Queue ${plan.messages} messages? ${plan.students} children get new passwords.`) && queue()}>Queue {plan.messages} messages</button>
           </div>
         )}
       </div>

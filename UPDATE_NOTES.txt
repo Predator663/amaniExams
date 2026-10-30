@@ -110,3 +110,17 @@ SMS: POST /api/guardians/send/ takes an optional "note" (max 160 chars, plain te
 Changed / new: guardians/{models,services,views,tests}.py guardians/migrations/0002_smsjob_note.py docs/PARENTS_SMS.md
   frontend/app/staff/guardians/page.tsx  + the integrity files above
 Rebuild the front end (npm run build).
+
+
+==== Update: parents' SMS message editor + parents from the student template (merged) + CONTROL ROOM ====
+Run:  python manage.py migrate        (guardians 0003, controlroom 0001)
+Test: python manage.py test guardians accounts controlroom
+SMS / parents: sms_message_update.zip and parent_linking_update.zip merged (see their notes above). Nothing else of yours was replaced.
+CONTROL ROOM (new Django app `controlroom`, see docs/control_room.md):
+  /controlroom/  owner-only: maintenance mode (whole site off, only the owner gets in, typed random words to confirm), sign everyone out,
+                 God's Eye (/controlroom/eye/: live accounts, who is online, SMS queue, audit trail, every table readable, secrets hidden)
+  GET /api/site-status/  public; the web app uses it to show the maintenance screen.   python manage.py maintenance on|off|status  (emergency)
+  Environment: CONTROLROOM_OWNERS=<your user name>
+Changed / new: controlroom/ (new)  config/settings.py (app, 2 middlewares, CONTROLROOM_OWNERS)  config/urls.py
+  frontend/components/MaintenanceGate.tsx (new)  frontend/app/layout.tsx  frontend/lib/api.ts  docs/control_room.md
+Rebuild the front end (npm run build).

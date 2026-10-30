@@ -6,7 +6,8 @@ Admins can do everything a teacher can, for all subjects, plus manage students, 
 1. **Academic year and terms** (ADM-04), **classes and streams**, **subjects**.
 2. **Teachers:** create accounts (strong password required), assign subjects and classes.
 3. **Students, in bulk (AUTH-02..06):**
-   - Download the template (columns: first name, last name, index number, class or form, stream).
+   - Download the template (columns: first name, last name, index number, class or form, stream, and the optional parent columns: parent name, parent phone, parent relationship, parent 2 name, parent 2 phone, parent 2 relationship).
+   - **Parents are linked automatically.** Fill the parent columns on each student's row. A parent with several children is simply written on each child's row with the **same phone number** (any format: 0712 345 678, +255712345678, 712345678) and becomes ONE parent linked to all of them; a parent who is already registered is reused. The name may be left empty on later rows. The parent columns are optional: rows without them create students only, and parents can still be added later under Parents. A wrong phone number is reported on its row and that student is not created until the row is fixed. Parents' numbers are stored encrypted (needs `GUARDIAN_KEY`).
    - Upload the Excel or CSV file. The system **validates** and shows a report of duplicate index numbers, missing fields and bad rows. Nothing is created until you **confirm**.
    - Accounts are created automatically. Username = first name in lowercase with no spaces (`amina`, `amina2`). First password = index number; the student must change it at first login.
    - Download the **printable credentials sheet** (PDF) per class.

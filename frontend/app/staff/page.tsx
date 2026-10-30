@@ -101,13 +101,16 @@ function BulkUpload() {
       {report && (
         <>
           <p><b>{report.valid_rows}</b> {t("valid_rows")} · <b className={report.invalid_rows ? "no" : "ok"}>{report.invalid_rows}</b> {t("invalid_rows")} ({report.total_rows} {t("total")})</p>
+          {report.parents?.links > 0 && <p className="ok">👪 {t("parents_summary", { rows: report.parents.rows_with_parents, links: report.parents.links, newp: report.parents.parents_new, old: report.parents.parents_existing, multi: report.parents.parents_with_several_students })}</p>}
           {report.errors.length > 0 && <div className="tbl-wrap"><table><tbody>{report.errors.slice(0, 50).map((x: any) => <tr key={x.row}><td>{t("row")} {x.row}</td><td>{x.problems.join("; ")}</td></tr>)}</tbody></table></div>}
+          {report.warnings?.length > 0 && <><h3>⚠ {t("parent_warnings")}</h3><div className="tbl-wrap"><table><tbody>{report.warnings.slice(0, 50).map((x: any) => <tr key={x.row}><td>{t("row")} {x.row}</td><td>{x.problems.join("; ")}</td></tr>)}</tbody></table></div></>}
           <button className="btn primary big" disabled={busy || !report.valid_rows} onClick={confirm}>{t("create_accounts", { n: report.valid_rows })}</button>
         </>
       )}
       {done && (
         <>
           <p className="ok">✓ {t("accounts_created", { n: done.created })}</p>
+          {done.parents && <p className="ok">👪 {t("parents_linked", { made: done.parents.parents_created, links: done.parents.links_created })}</p>}
           <button className="btn primary" onClick={() => downloadFile(done.credentials_url.replace(/^\/api/, "") + "?file=pdf", "credentials.pdf").catch((e) => setErr(e.message))}>⬇ {t("credential_sheet")}</button>
         </>
       )}

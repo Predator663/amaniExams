@@ -1,0 +1,20 @@
+{% extends "admin/base_site.html" %}
+{% block title %}{{ title }} | Control room{% endblock %}
+{% block extrastyle %}{{ block.super }}
+<style>
+.cr{max-width:1100px;margin:0 auto}.cr h1{margin:0 0 12px}
+.cr .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:12px 0}
+.cr .card{background:var(--darkened-bg,#f8f8f8);border:1px solid var(--hairline-color,#ddd);border-radius:10px;padding:12px}
+.cr .big{font-size:26px;font-weight:700}.cr .muted{color:var(--body-quiet-color,#666);font-size:12px}
+.cr .on{background:#7f1d1d;color:#fff;padding:14px;border-radius:10px;margin-bottom:14px}
+.cr .off{background:#14532d;color:#fff;padding:14px;border-radius:10px;margin-bottom:14px}
+.cr .phrase{font:700 22px ui-monospace,monospace;letter-spacing:.5px;background:#111;color:#fde047;padding:10px 14px;border-radius:8px;display:inline-block;user-select:none}
+.cr input[type=text]{width:100%;max-width:520px;padding:8px}.cr .danger{background:#b91c1c;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-weight:700;cursor:pointer}
+.cr .safe{background:#15803d;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-weight:700;cursor:pointer}
+.cr .scroll{overflow-x:auto}.cr table{width:100%}.cr nav a{margin-right:14px;font-weight:600}
+</style>{% endblock %}
+{% block breadcrumbs %}<div class="breadcrumbs"><a href="/django-admin/">Home</a> &rsaquo; <a href="{% url 'controlroom:home' %}">Control room</a>{% if title and title != 'Control room' %} &rsaquo; {{ title }}{% endif %}</div>{% endblock %}
+{% block content %}<div class="cr">
+<nav><a href="{% url 'controlroom:home' %}">Control room</a><a href="{% url 'controlroom:eye' %}">God's Eye</a><a href="{% url 'controlroom:tables' %}">Every table</a><a href="/django-admin/">Django admin</a></nav>
+{% if messages %}<ul class="messagelist">{% for m in messages %}<li class="{{ m.tags }}">{{ m }}</li>{% endfor %}</ul>{% endif %}
+{% block cr %}{% endblock %}</div>{% endblock %}

@@ -283,7 +283,10 @@ def bulk_validate(request):
         return Response({"detail": str(e)}, status=400)
     except Exception:
         return Response({"detail": "We could not read that file. Please use the template."}, status=400)
-    clean, report = validate_rows(rows)
+    try:
+        clean, report = validate_rows(rows)
+    except ValueError as e:  # e.g. parents named in the file but GUARDIAN_KEY is not set
+        return Response({"detail": str(e)}, status=400)
     batch = BulkUploadBatch.objects.create(created_by=request.user, rows=clean, report=report)
     return Response({"batch_id": batch.pk, **report})
 
@@ -301,7 +304,10 @@ def bulk_confirm(request, batch_id):
     if batch.report.get("invalid_rows") and not request.data.get("skip_invalid"):
         return Response({"detail": "Some rows are invalid. Fix the file, or confirm with skip_invalid to create only the valid rows."}, status=400)
     ids = create_students(batch, request.user)
-    return Response({"created": len(ids), "credentials_url": f"/api/students/bulk-upload/{batch.pk}/credentials/"})
+    out = {"created": len(ids), "credentials_url": f"/api/students/bulk-upload/{batch.pk}/credentials/"}
+    if batch.report.get("parents_result"):
+        out["parents"] = batch.report["parents_result"]
+    return Response(out)
 
 
 def _credentials_response(users, stub, kind):

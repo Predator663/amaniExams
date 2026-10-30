@@ -1,0 +1,4 @@
+{% extends "controlroom/base.html" %}
+{% block cr %}<h1>Every table</h1><p class="muted">Read-only view of every model in the project. Password, token and encrypted fields are always hidden.</p>
+<div class="scroll"><table><tr><th>Table</th><th>Rows</th></tr>
+{% for i in items %}<tr><td><a href="{% url 'controlroom:rows' i.label %}">{{ i.label }}</a> <span class="muted">{{ i.name }}</span></td><td>{{ i.count|default_if_none:"?" }}</td></tr>{% endfor %}</table></div>{% endblock %}

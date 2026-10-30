@@ -76,6 +76,8 @@ class SmsJob(models.Model):
     students = models.JSONField(default=list)  # ids of the students whose details are in the message
     note = models.CharField(max_length=160, blank=True)  # the optional custom line the administrator added to the login details
     summary = models.CharField(max_length=200, blank=True)  # e.g. "Login details for Amina Juma" (never the password)
+    login = models.BooleanField(default=True)  # False = a custom message only: no login details, no passwords changed
+    template = models.TextField(blank=True, default="")  # the administrator's edited wording (login: the message with {url} and {children}; custom: the whole text)
     to_enc = models.TextField()
     body_enc = models.TextField(blank=True)  # holds passwords, so it is erased as soon as the SMS has been sent
     status = models.CharField(max_length=10, choices=STATUSES, default=QUEUED, db_index=True)

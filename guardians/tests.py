@@ -10,6 +10,7 @@ from accounts.models import User
 from analytics.tests import AnalyticsBase
 from core.models import AuditLog
 from . import crypto
+from . import services as gsvc
 from .models import Guardian, GuardianLink, SmsConfig, SmsJob
 from .phones import mask, normalize_phone
 
@@ -325,3 +326,89 @@ class PhoneAppTests(GuardianBase):
     def test_config_is_validated(self):
         self.assertEqual(self.a.patch("/api/guardians/config/", {"public_url": "https://amani.example/", "seconds_between": 10}, format="json").json()["public_url"], "amani.example")
         self.assertEqual(self.a.patch("/api/guardians/config/", {"seconds_between": 1}, format="json").status_code, 400)
+
+
+class EditableMessageTests(GuardianBase):
+    """The administrator can edit the wording of the login SMS, or send a custom message with no login details at all."""
+
+    def send(self, **kw):
+        return self.a.post("/api/guardians/send/", {"scope": "all", **kw}, format="json")
+
+    def body(self, job):
+        return crypto.decrypt(job.body_enc)
+
+    def test_the_standard_wording_is_offered_to_the_screen(self):
+        d = self.a.get("/api/guardians/summary/").json()["default_messages"]
+        self.assertIn("{children}", d["sw"])
+        self.assertIn("{url}", d["en"])
+
+    def test_untouched_wording_gives_exactly_the_old_message(self):
+        self.load()
+        sw = gsvc.DEFAULT_MESSAGES
+        self.send(dry_run=False, message_sw=sw["sw"], message_en=sw["en"])
+        j = SmsJob.objects.filter(guardian__language="sw").first()
+        self.assertTrue(self.body(j).startswith("Amani Girls: taarifa za kuingia kwenye mitihani. Fungua amani.example\n"))
+        self.assertEqual(j.template, "")  # nothing special stored
+
+    def test_edited_wording_is_used_kept_and_the_passwords_still_arrive(self):
+        self.load()
+        text = "Habari mzazi! Ingia hapa: {url}\n{children}\nUsimpe mtu."
+        pre = self.send(message_sw=text).json()
+        self.assertTrue(pre["preview"]["text"].startswith("Habari mzazi! Ingia hapa: amani.example\n"))
+        self.assertIn("nenosiri xxxxxxxx", pre["preview"]["text"])
+        r = self.send(dry_run=False, message_sw=text, note="Mkutano Ijumaa")
+        self.assertEqual(r.status_code, 201)
+        j = SmsJob.objects.filter(guardian__language="sw").first()
+        body = self.body(j)
+        self.assertTrue(body.startswith("Habari mzazi!"))
+        self.assertTrue(body.endswith("Usimpe mtu.\nMkutano Ijumaa"))
+        self.assertRegex(body, r"nenosiri [a-z2-9]{8}")
+        self.assertEqual(j.template, text)
+        # a cancelled message is remade with the same wording and a new password
+        SmsJob.objects.filter(pk=j.pk).update(status=SmsJob.CANCELLED, body_enc="")
+        j.refresh_from_db()
+        self.assertEqual(self.a.post(f"/api/guardians/jobs/{j.pk}/retry/").json()["requeued"], 1)
+        j.refresh_from_db()
+        self.assertTrue(self.body(j).startswith("Habari mzazi!"))
+
+    def test_wording_without_the_children_placeholder_is_refused(self):
+        self.load()
+        r = self.send(dry_run=False, message_sw="Habari, ingia {url}")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("{children}", r.json()["detail"])
+        self.assertEqual(SmsJob.objects.count(), 0)
+
+    def test_custom_message_only_sends_just_that_text_and_changes_no_password(self):
+        self.upload(True, True)  # parents saved, school web address NOT set: not needed for a custom message
+        before = {u.pk: (u.password, u.must_change_password) for u in User.objects.filter(role="student")}
+        self.assertEqual(self.send(include_login=False).status_code, 400)  # a text is required
+        pre = self.send(include_login=False, note="Parents meeting Friday 9am.").json()
+        self.assertEqual((pre["login"], pre["messages"], pre["preview"]["text"]), (False, 2, "Parents meeting Friday 9am."))
+        r = self.send(include_login=False, note="Parents meeting Friday 9am.", dry_run=False)
+        self.assertEqual((r.status_code, r.json()["queued"]), (201, 2))
+        for j in SmsJob.objects.all():
+            self.assertEqual((j.login, j.students, self.body(j)), (False, [], "Parents meeting Friday 9am."))
+        after = {u.pk: (u.password, u.must_change_password) for u in User.objects.filter(role="student")}
+        self.assertEqual(before, after)
+        # children are not marked as already sent a login: the login send still includes them
+        items, skipped = gsvc.plan_send("all")
+        self.assertEqual(skipped["already_sent"], 0)
+        self.assertEqual(sum(len(k) for _, k in items), 3)  # Amina has two parents, Zawadi one
+
+    def test_custom_message_can_be_longer_than_the_extra_line_but_not_endless(self):
+        self.upload(True, True)
+        self.assertEqual(self.send(include_login=False, note="x" * 400).status_code, 200)
+        self.assertEqual(self.send(include_login=False, note="x" * 500).status_code, 400)
+        self.assertEqual(self.send(note="x" * 200).status_code, 400)  # with login details the extra line stays at 160
+
+    def test_custom_message_by_class_and_a_failed_one_can_be_retried(self):
+        self.upload(True, True)
+        r = self.send(scope="class", class_id=self.cls_a.pk, include_login=False, note="Hello", dry_run=False)
+        self.assertEqual(r.json()["queued"], 2)  # both of Amina's parents, nobody from Zawadi's class
+        self.assertEqual(self.send(scope="class", class_id=self.cls_b.pk, include_login=False, note="Hello").json()["messages"], 1)
+        j = SmsJob.objects.order_by("id").first()
+        SmsJob.objects.filter(pk=j.pk).update(status=SmsJob.CANCELLED, body_enc="")
+        self.assertEqual(self.a.post(f"/api/guardians/jobs/{j.pk}/retry/").json()["requeued"], 1)
+        j.refresh_from_db()
+        self.assertEqual((j.status, self.body(j)), (SmsJob.QUEUED, "Hello"))
+        self.assertFalse(self.a.get("/api/guardians/jobs/").json()[0]["login"])

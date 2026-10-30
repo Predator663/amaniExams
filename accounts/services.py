@@ -15,7 +15,10 @@ from core.models import audit
 from .hashers import InitialPasswordHasher
 from .models import BulkUploadBatch, User
 
-TEMPLATE_COLUMNS = ["first name", "last name", "index number", "class or form", "stream"]
+TEMPLATE_COLUMNS = ["first name", "last name", "index number", "class or form", "stream",
+                    # optional: parents are linked to the new students automatically (a parent with several children appears on several rows)
+                    "parent name", "parent phone", "parent relationship", "parent 2 name", "parent 2 phone", "parent 2 relationship"]
+REQUIRED_COLUMNS = TEMPLATE_COLUMNS[:4]
 
 
 def _norm_header(h):
@@ -39,7 +42,7 @@ def parse_upload(uploaded_file):
     if not rows:
         raise ValueError("The file is empty.")
     headers = [_norm_header(h) for h in rows[0]]
-    missing = [c for c in TEMPLATE_COLUMNS[:4] if c not in headers]
+    missing = [c for c in REQUIRED_COLUMNS if c not in headers]
     if missing:
         raise ValueError("Missing column(s): " + ", ".join(missing) + ". Please use the downloadable template.")
     out = []
@@ -53,9 +56,11 @@ def parse_upload(uploaded_file):
 
 
 def validate_rows(rows):
+    from guardians import services as parents  # imported here: the guardians app also imports accounts
+
     existing_index = set(User.objects.exclude(index_number="").values_list("index_number", flat=True))
     seen = {}
-    clean, errors = [], []
+    clean, errors, warnings, with_parents = [], [], [], []
     for d in rows:
         problems = []
         first, last = d.get("first name", ""), d.get("last name", "")
@@ -71,11 +76,37 @@ def validate_rows(rows):
             seen.setdefault(index, d["_row"])
         if klass and not re.search(r"[1-4]", klass):
             problems.append("class or form must include a form number from 1 to 4")
+        found, p_problems, p_warns = parents.read_parent_cells(d)
+        problems += p_problems
         if problems:
             errors.append({"row": d["_row"], "problems": problems})
         else:
-            clean.append({"first_name": first, "last_name": last, "index_number": index, "class": klass, "stream": stream})
-    report = {"total_rows": len(rows), "valid_rows": len(clean), "invalid_rows": len(errors), "errors": errors}
+            row = {"first_name": first, "last_name": last, "index_number": index, "class": klass, "stream": stream}
+            clean.append(row)
+            if found:
+                with_parents.append((d["_row"], found, row))
+            if p_warns:
+                warnings.append({"row": d["_row"], "problems": p_warns})
+    stats = {"rows_with_parents": 0, "parents_new": 0, "parents_existing": 0, "links": 0, "parents_with_several_students": 0}
+    if with_parents:
+        parents.ensure_parent_key()
+        bad, warn, stats = parents.settle_parents([(r, ps) for r, ps, _ in with_parents])
+        for r, ps, row in with_parents:
+            if r in bad:
+                clean.remove(row)
+                errors.append({"row": r, "problems": bad[r]})
+            else:
+                row["parents_enc"] = parents.encode_parents(ps)  # encrypted until the admin confirms
+        for r, texts in warn.items():
+            if r not in bad:
+                warnings.append({"row": r, "problems": texts})
+        errors.sort(key=lambda e: e["row"])
+        merged = {}
+        for w in warnings:
+            merged.setdefault(w["row"], []).extend(w["problems"])
+        warnings = [{"row": r, "problems": merged[r]} for r in sorted(merged)]
+    report = {"total_rows": len(rows), "valid_rows": len(clean), "invalid_rows": len(errors), "errors": errors,
+              "warnings": warnings, "parents": stats}
     return clean, report
 
 
@@ -92,9 +123,11 @@ def make_username(first_name, taken):
 
 @transaction.atomic
 def create_students(batch, actor):
+    from guardians import services as parents
+
     taken = set(User.objects.values_list("username", flat=True))
     class_cache = {}
-    users = []
+    users, wanted = [], []  # wanted[i] = the parents named on the row of users[i]
     for r in batch.rows:
         key = (r["class"], r["stream"])
         if key not in class_cache:
@@ -115,13 +148,18 @@ def create_students(batch, actor):
                 password=make_password(r["index_number"], hasher=InitialPasswordHasher.algorithm),
             )
         )
+        wanted.append(parents.decode_parents(r.get("parents_enc", "")))  # rows saved before this feature have none
     User.objects.bulk_create(users)
-    ids = list(User.objects.filter(username__in=[u.username for u in users]).values_list("pk", flat=True))
+    pk_of = dict(User.objects.filter(username__in=[u.username for u in users]).values_list("username", "pk"))
+    ids = list(pk_of.values())
+    result = parents.link_new_students([(pk_of[u.username], ps) for u, ps in zip(users, wanted) if ps], actor)
     batch.status = BulkUploadBatch.CONFIRMED
     batch.created_user_ids = ids
-    batch.rows = []  # no need to keep the data once accounts exist
+    batch.rows = []  # no need to keep the data (parents' numbers included) once accounts exist
+    if any(result.values()):
+        batch.report = {**batch.report, "parents_result": result}
     batch.save()
-    audit(actor, "students.bulk_upload", batch.pk, created=len(ids))
+    audit(actor, "students.bulk_upload", batch.pk, created=len(ids), **(result if any(result.values()) else {}))
     return ids
 
 

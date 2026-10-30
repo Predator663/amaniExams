@@ -1,0 +1,24 @@
+{% extends "controlroom/base.html" %}
+{% block cr %}
+<h1>Control room</h1>
+{% if ctl.maintenance %}
+<div class="on"><b>MAINTENANCE MODE IS ON.</b> Everybody except you sees the maintenance page.<br>
+Since {{ ctl.started_at|date:"Y-m-d H:i" }} by {{ ctl.started_by }}{% if ctl.message %} &middot; "{{ ctl.message }}"{% endif %}{% if ctl.back_at %} &middot; back: {{ ctl.back_at }}{% endif %}</div>
+<form method="post" action="{% url 'controlroom:off' %}">{% csrf_token %}<button class="safe">Bring the site back online</button></form>
+{% else %}
+<div class="off"><b>The site is ONLINE.</b></div>
+<div class="card"><h2 style="margin-top:0">Turn the whole site off (maintenance mode)</h2>
+<p>Students, teachers, admins and parents lose access to the website and the API at once. Only {{ owners|join:", " }} can still get in.</p>
+<form method="post" action="{% url 'controlroom:on' %}" autocomplete="off">{% csrf_token %}
+<p><label>Message shown to visitors (optional)<br><input type="text" name="message" maxlength="300" placeholder="e.g. Server upgrade in progress"></label></p>
+<p><label>Back at (optional)<br><input type="text" name="back_at" maxlength="80" placeholder="e.g. around 18:00"></label></p>
+<p><label><input type="checkbox" name="logout_all"> Also sign out every current session</label></p>
+<p>To confirm, type these words exactly:</p>
+<p><span class="phrase">{{ phrase }}</span></p>
+<p><input type="text" name="phrase" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="type the words above"></p>
+<button class="danger">Turn the site off</button></form></div>
+{% endif %}
+<h2>Recent switches</h2>
+<div class="scroll"><table><tr><th>When</th><th>Who</th><th>Action</th><th>Detail</th></tr>
+{% for e in events %}<tr><td>{{ e.at|date:"Y-m-d H:i" }}</td><td>{{ e.who }}</td><td>{{ e.action }}</td><td>{{ e.detail }}</td></tr>{% empty %}<tr><td colspan="4">Nothing yet.</td></tr>{% endfor %}</table></div>
+{% endblock %}

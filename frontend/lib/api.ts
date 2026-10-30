@@ -54,6 +54,7 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
     throw new ApiError(`Cannot reach the server (${apiBase()}). Check your internet. If you run it yourself, make sure the Django server is running.`, 0, "network");
   }
   if (!res.ok) {
+    if (res.status === 503 && data?.code === "maintenance") window.dispatchEvent(new CustomEvent("amani:maintenance", { detail: data }));
     if (res.status === 401 && opts.auth !== false) window.dispatchEvent(new CustomEvent("amani:unauthorized"));
     if (res.status === 403 && data?.code === "password_change_required") window.dispatchEvent(new CustomEvent("amani:must-change-password"));
     throw new ApiError(firstMessage(data, res.status), res.status, data?.code || "error", data);

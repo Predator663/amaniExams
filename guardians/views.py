@@ -198,7 +198,7 @@ def summary(request):
         "students_waiting_first_login": students.filter(must_change_password=True).count(),
         "without_parent": [{"id": s.pk, "name": f"{s.first_name} {s.last_name}".strip(), "index": s.index_number,
                             "class": str(s.school_class) if s.school_class_id else ""} for s in without[:40]],
-        "jobs": counts, "phone_online": SmsDevice.objects.filter(active=True, last_seen__gte=cutoff).exists(),
+        "default_messages": services.DEFAULT_MESSAGES, "jobs": counts, "phone_online": SmsDevice.objects.filter(active=True, last_seen__gte=cutoff).exists(),
     })
 
 
@@ -213,20 +213,33 @@ def send(request):
     if scope == "class" and not d.get("class_id"):
         return _err("Choose a class.")
     resend = d.get("resend") is True
+    login = d.get("include_login") is not False  # unticked in the app = a custom message only
     note = services.clean_note(d.get("note"))
-    if len(note) > services.NOTE_MAX:
-        return _err(f"The extra message is too long ({len(note)} characters). Keep it to {services.NOTE_MAX} characters or fewer.")
-    items, skipped = services.plan_send(scope, d.get("class_id"), d.get("guardian_ids"), resend)
-    info = {"messages": len(items), "students": sum(len(k) for _, k in items), "skipped": skipped,
+    limit = services.NOTE_MAX if login else services.CUSTOM_MAX
+    if len(note) > limit:
+        return _err(f"The message is too long ({len(note)} characters). Keep it to {limit} characters or fewer.")
+    cfg = SmsConfig.load()
+    if login:
+        try:
+            templates = services.check_templates(d)
+        except ValueError as e:
+            return _err(str(e))
+        items, skipped = services.plan_send(scope, d.get("class_id"), d.get("guardian_ids"), resend)
+    else:
+        if not note:
+            return _err("Write the message to send. With 'include login details' unticked, only your own text is sent.")
+        templates = {}
+        items, skipped = services.plan_custom(scope, d.get("class_id"), d.get("guardian_ids"))
+    info = {"messages": len(items), "students": sum(len(k) for _, k in items), "skipped": skipped, "login": login,
             "whatsapp_parents": sum(1 for g, _ in items if g.has_whatsapp), "note": note,
-            "preview": services.preview(items, SmsConfig.load(), note)}
+            "preview": services.preview(items, cfg, note, templates, login)}
     if d.get("dry_run") is not False:
         return Response({"dry_run": True, **info})
-    cfg = SmsConfig.load()
-    if not cfg.public_url.strip():
+    if login and not cfg.public_url.strip():
         return _err("First write the school's web address in the Phone tab. It goes into every message.")
-    n = services.queue_send(items, request.user, note)
-    audit(request.user, "sms.queue", n, scope=scope, resend=resend, students=info["students"], custom_note=bool(note))
+    n = services.queue_send(items, request.user, note, templates) if login else services.queue_custom(items, request.user, note)
+    audit(request.user, "sms.queue", n, scope=scope, resend=resend, students=info["students"], custom_note=bool(note),
+          login=login, edited_wording=any(templates.values()))
     return Response({"dry_run": False, "queued": n, **info}, status=201)
 
 
@@ -239,7 +252,7 @@ def jobs(request):
         qs = qs.filter(status=p["status"])
     def row(j):
         return {"id": j.pk, "parent": j.guardian.name if j.guardian else "(deleted)", "phone": mask(crypto.decrypt(j.to_enc)),
-                "summary": j.summary, "note": j.note, "status": j.status, "error": j.error, "attempts": j.attempts,
+                "summary": j.summary, "note": j.note, "login": j.login, "status": j.status, "error": j.error, "attempts": j.attempts,
                 "whatsapp": bool(j.guardian and j.guardian.has_whatsapp), "created_at": j.created_at, "sent_at": j.sent_at,
                 "phone_name": j.device.name if j.device else ""}
     paged = paginate(request, qs, default=20, row=row)

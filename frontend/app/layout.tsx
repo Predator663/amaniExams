@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { ReactNode } from "react";
 import { SessionProvider } from "@/lib/session";
 import SwRegister from "@/components/SwRegister";
+import MaintenanceGate from "@/components/MaintenanceGate";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,6 +19,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en">
       <body>
         <SessionProvider>{children}</SessionProvider>
+        <MaintenanceGate />
         <SwRegister />
       </body>
     </html>
