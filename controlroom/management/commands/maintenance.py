@@ -23,5 +23,5 @@ class Command(BaseCommand):
             ctl.started_at, ctl.started_by, ctl.message, ctl.back_at = timezone.now(), "shell", message[:300], back_at[:80]
         ctl.save()
         state.reset_cache()
-        ControlEvent.objects.create(who="shell", action="maintenance_" + action, detail=message[:500])
+        ControlEvent.objects.create(who="shell", action="maintenance_" + action, detail=f"message={message[:300]!r} back_at={back_at[:80]!r}" if ctl.maintenance else "")
         self.stdout.write(self.style.WARNING("Maintenance is now ON") if ctl.maintenance else self.style.SUCCESS("Site is online"))

@@ -9,12 +9,24 @@ from django.contrib.sessions.models import Session
 from django.db import models as dj
 from django.utils import timezone
 
-HIDE = re.compile(r"(password|passwd|secret|token|api_?key|^key$|private|_enc$|^enc_|_idx$|hash|otp|salt|signature|credential|(^|_)auth($|_)|p256dh)", re.I)
+HIDE = re.compile(r"(password|passwd|secret|token|api_?key|^key$|private|_enc$|^enc_|_idx$|hash|otp|salt|signature|credential|(^|_)auth($|_)|p256dh|session_(key|data))", re.I)
 HIDDEN = "••• hidden"
 
 
 def all_models():
     return sorted((m for m in apps.get_models() if not m._meta.proxy), key=lambda m: m._meta.label_lower)
+
+
+def admin_url(m):
+    """Address of the model's list in /django-admin/, or "" when it has no admin."""
+    from django.contrib import admin
+    from django.urls import NoReverseMatch, reverse
+    if not admin.site.is_registered(m):
+        return ""
+    try:
+        return reverse(f"admin:{m._meta.app_label}_{m._meta.model_name}_changelist")
+    except NoReverseMatch:
+        return ""
 
 
 def get_model(label):
@@ -51,7 +63,8 @@ def counts():
             n = m._default_manager.count()
         except Exception:
             n = None
-        out.append({"label": m._meta.label_lower, "name": str(m._meta.verbose_name_plural).title(), "count": n})
+        out.append({"label": m._meta.label_lower, "name": str(m._meta.verbose_name_plural).title(), "count": n,
+                    "admin_url": admin_url(m)})
     return out
 
 

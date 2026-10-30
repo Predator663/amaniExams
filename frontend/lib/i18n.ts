@@ -43,7 +43,7 @@ const en: Dict = {
   n_questions_available: "{n} questions available", not_enough: "Not enough questions", check_answer: "Check answer", next_question: "Next question", see_summary: "See summary", practice_done: "Practice complete!", practice_score: "{a} of {b} fully correct",
   locked: "Locked", max_tier: "Top tier reached!", xp_history: "XP history", no_xp: "No XP yet. Take a practice quiz to start!", my_profile: "My profile",
   this_week: "This week", all_time: "All time", you: "you", leaderboard_note: "Ranked by XP only, never by exam marks. You can hide yourself in Settings.", no_notifications: "No notifications yet.",
-  language: "Language", theme: "Theme", theme_light: "Light", theme_dark: "Dark", theme_high_contrast: "High contrast", theme_colour_blind: "Colour-blind safe", theme_soft: "Soft (low glare)", hc_variant: "High contrast style", hc_yellow: "Yellow on black", hc_black: "Black on white",
+  language: "Language", theme: "Theme", theme_light: "Light", theme_dark: "Dark", theme_high_contrast: "High contrast", theme_colour_blind: "Colour-blind safe", theme_soft: "Soft (low glare)", theme_mw3: "Modern Warfare III", hc_variant: "High contrast style", hc_yellow: "Yellow on black", hc_black: "Black on white",
   text_size: "Text size", line_spacing: "Line spacing", dyslexia_font: "Dyslexia-friendly font", reduce_motion: "Reduce motion", read_aloud: "Read-aloud button on questions", read_aloud_unsupported: "This phone cannot read aloud.",
   avatar: "Avatar", display_name: "Name classmates see", display_name_hint: "Leave empty to use your first name", hide_leaderboard: "Hide me from the leaderboard",
   push_on: "Turn on phone notifications", push_off: "Turn off phone notifications", push_not_ready: "Phone notifications are not set up yet.", push_denied: "Notifications are blocked. Allow them in the phone settings.",
@@ -72,6 +72,9 @@ const en: Dict = {
   lock_banner: "You are sitting too close to another student. You must move apart.", lock_title: "Your exam is locked",
   lock_body: "Move away from the other student. Your answers are safe. The timer keeps running, so no extra time is given. After you have moved apart, wait for the invigilator to unlock your exam.",
   lock_wait: "This screen opens by itself when an administrator unlocks your exam.",
+  leave_warn: "You left the exam screen. That is {n} of {max} allowed. One more after that and your exam locks.", leave_warn_last: "You left the exam screen {n} times. Leave once more and your exam will be locked.",
+  lock_banner_leaves: "You left the exam screen too many times.", lock_body_leaves: "Your answers are safe. The timer keeps running, so no extra time is given. Stay on this screen and wait for the invigilator to unlock your exam.",
+  lock_banner_manual: "An administrator locked your exam.", lock_body_manual: "Your answers are safe. The timer keeps running, so no extra time is given. Wait for the invigilator to unlock your exam.",
   loc_retry: "I turned it on, continue", loc_on: "Location on", bt_warn: "Bluetooth looks off. Please turn it on.",
 };
 
@@ -116,7 +119,7 @@ const sw: Dict = {
   n_questions_available: "Maswali {n} yanapatikana", not_enough: "Maswali hayatoshi", check_answer: "Hakiki jibu", next_question: "Swali linalofuata", see_summary: "Tazama muhtasari", practice_done: "Mazoezi yamekamilika!", practice_score: "{a} kati ya {b} sahihi kabisa",
   locked: "Imefungwa", max_tier: "Umefika kiwango cha juu!", xp_history: "Historia ya XP", no_xp: "Bado huna XP. Fanya zoezi ili uanze!", my_profile: "Wasifu wangu",
   this_week: "Wiki hii", all_time: "Wakati wote", you: "wewe", leaderboard_note: "Inapangwa kwa XP pekee, kamwe si kwa alama za mtihani. Unaweza kujificha katika Mipangilio.", no_notifications: "Bado hakuna arifa.",
-  language: "Lugha", theme: "Mandhari", theme_light: "Angavu", theme_dark: "Giza", theme_high_contrast: "Utofautishaji wa juu", theme_colour_blind: "Salama kwa wasioona rangi", theme_soft: "Laini (mwanga hafifu)", hc_variant: "Mtindo wa utofautishaji wa juu", hc_yellow: "Njano kwenye nyeusi", hc_black: "Nyeusi kwenye nyeupe",
+  language: "Lugha", theme: "Mandhari", theme_light: "Angavu", theme_dark: "Giza", theme_high_contrast: "Utofautishaji wa juu", theme_colour_blind: "Salama kwa wasioona rangi", theme_soft: "Laini (mwanga hafifu)", theme_mw3: "Modern Warfare III", hc_variant: "Mtindo wa utofautishaji wa juu", hc_yellow: "Njano kwenye nyeusi", hc_black: "Nyeusi kwenye nyeupe",
   text_size: "Ukubwa wa maandishi", line_spacing: "Nafasi ya mistari", dyslexia_font: "Herufi rafiki kwa wenye dyslexia", reduce_motion: "Punguza mwendo", read_aloud: "Kitufe cha kusoma kwa sauti kwenye maswali", read_aloud_unsupported: "Simu hii haiwezi kusoma kwa sauti.",
   avatar: "Picha ya alama", display_name: "Jina wanaloliona wanafunzi wenzako", display_name_hint: "Acha wazi kutumia jina lako la kwanza", hide_leaderboard: "Nifiche kwenye ubao wa viongozi",
   push_on: "Washa arifa za simu", push_off: "Zima arifa za simu", push_not_ready: "Arifa za simu bado hazijaandaliwa.", push_denied: "Arifa zimezuiwa. Ziruhusu kwenye mipangilio ya simu.",
@@ -145,6 +148,9 @@ const sw: Dict = {
   lock_banner: "Umekaa karibu sana na mwanafunzi mwingine. Lazima mtengane.", lock_title: "Mtihani wako umefungwa",
   lock_body: "Ondoka mbali na mwanafunzi mwingine. Majibu yako ni salama. Saa inaendelea, kwa hiyo hakuna muda wa ziada. Mkishatengana, subiri msimamizi afungue mtihani wako.",
   lock_wait: "Skrini hii itafunguka yenyewe msimamizi atakapofungua mtihani wako.",
+  leave_warn: "Umeondoka kwenye skrini ya mtihani. Hiyo ni mara {n} kati ya {max} zinazoruhusiwa. Ukiondoka tena baada ya hapo mtihani wako utafungwa.", leave_warn_last: "Umeondoka kwenye skrini ya mtihani mara {n}. Ukiondoka tena mtihani wako utafungwa.",
+  lock_banner_leaves: "Umeondoka kwenye skrini ya mtihani mara nyingi sana.", lock_body_leaves: "Majibu yako ni salama. Saa inaendelea, kwa hiyo hakuna muda wa ziada. Baki kwenye skrini hii na usubiri msimamizi afungue mtihani wako.",
+  lock_banner_manual: "Msimamizi amefunga mtihani wako.", lock_body_manual: "Majibu yako ni salama. Saa inaendelea, kwa hiyo hakuna muda wa ziada. Subiri msimamizi afungue mtihani wako.",
   loc_retry: "Nimewasha, endelea", loc_on: "Eneo limewashwa", bt_warn: "Bluetooth inaonekana imezimwa. Tafadhali iwashe.",
 };
 

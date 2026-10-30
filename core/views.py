@@ -59,12 +59,16 @@ def presence(request):
 SETTINGS_FIELDS = [
     "school_name", "result_delay_minutes", "late_entry_minutes", "question_approval_required",
     "show_class_position", "leaderboard_enabled", "grade_scale", "rules_text", "default_theme", "default_language",
-    "proximity_alert_meters", "proximity_lock_enabled",
+    "proximity_alert_meters", "proximity_lock_enabled", "leave_lock_enabled", "leave_lock_limit",
 ]
 
 
-def _settings_payload(s):
-    d = {f: getattr(s, f) for f in SETTINGS_FIELDS}
+# SECURITY: anti-cheat thresholds are for administrators only; a student who knows the distance or the leave limit can game them.
+ADMIN_ONLY_FIELDS = {"proximity_alert_meters", "proximity_lock_enabled", "leave_lock_enabled", "leave_lock_limit"}
+
+
+def _settings_payload(s, admin=True):
+    d = {f: getattr(s, f) for f in SETTINGS_FIELDS if admin or f not in ADMIN_ONLY_FIELDS}
     d["logo_url"] = s.logo.url if s.logo else None
     return d
 
@@ -95,7 +99,19 @@ def clean_settings(data):
                 errors["proximity_alert_meters"] = "Enter a distance from 1 to 500 metres."
             else:
                 clean["proximity_alert_meters"] = round(v, 1)
-    for name in ("question_approval_required", "show_class_position", "leaderboard_enabled", "proximity_lock_enabled"):
+    if "leave_lock_limit" in data:
+        try:
+            if isinstance(data["leave_lock_limit"], bool):
+                raise ValueError
+            v = int(data["leave_lock_limit"])
+        except (TypeError, ValueError):
+            errors["leave_lock_limit"] = "Enter a whole number."
+        else:
+            if not 0 <= v <= 50:
+                errors["leave_lock_limit"] = "Enter a number from 0 to 50."
+            else:
+                clean["leave_lock_limit"] = v
+    for name in ("question_approval_required", "show_class_position", "leaderboard_enabled", "proximity_lock_enabled", "leave_lock_enabled"):
         if name in data:
             if isinstance(data[name], bool):
                 clean[name] = data[name]
@@ -141,7 +157,7 @@ def school_settings(request):
             setattr(s, f, v)
         s.save()
         audit(request.user, "settings.update", 1, fields=sorted(clean))
-    return Response(_settings_payload(s))
+    return Response(_settings_payload(s, IsAdminRole().has_permission(request, None)))
 
 
 @api_view(["POST"])

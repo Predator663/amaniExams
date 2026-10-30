@@ -3,6 +3,7 @@ import logging
 from datetime import timedelta
 
 from django.contrib.auth import authenticate
+from django.core.cache import cache
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
@@ -24,6 +25,7 @@ from notifications.services import notify_password_changed
 from .hashers import InitialPasswordHasher
 from .models import THEMES, BulkUploadBatch, User
 from .permissions import IsAdminRole, IsSuperAdmin
+from . import temp_password
 from .services import (TEMPLATE_COLUMNS, create_students, generate_password, parse_upload, validate_rows,
                        validate_staff_password)
 
@@ -44,6 +46,27 @@ def user_payload(u):
     }
 
 
+class _FakeLock:
+    """Same lock-out behaviour for user names that do not exist, kept in the cache (SECURITY: otherwise only real names ever
+    produce the "too many attempts" message and an attacker can list which names exist)."""
+
+    def __init__(self, username):
+        self.key = "login-fake:" + username.strip().lower()[:80]
+        self.state = cache.get(self.key) or {"n": 0, "until": 0}
+
+    def locked(self, now):
+        return self.state["until"] > now.timestamp()
+
+    def minutes_left(self, now):
+        return int((self.state["until"] - now.timestamp()) // 60) + 1
+
+    def fail(self, now):
+        self.state["n"] += 1
+        if self.state["n"] >= MAX_FAILED:
+            self.state = {"n": 0, "until": now.timestamp() + LOCK_MINUTES * 60}
+        cache.set(self.key, self.state, LOCK_MINUTES * 60 + 60)
+
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -57,8 +80,13 @@ class LoginView(APIView):
         if user and user.locked_until and user.locked_until > now:
             mins = int((user.locked_until - now).total_seconds() // 60) + 1
             return Response({"detail": f"Too many wrong attempts. Please try again in {mins} minute(s)."}, status=429)
+        fake = None if user or not username else _FakeLock(username)
+        if fake and fake.locked(now):  # a name that does not exist is "locked" too, so the message never shows which names are real
+            return Response({"detail": f"Too many wrong attempts. Please try again in {fake.minutes_left(now)} minute(s)."}, status=429)
         authed = authenticate(request, username=user.username, password=password) if user else None
         if not authed:
+            if fake:
+                fake.fail(now)
             if user:
                 user.failed_logins += 1
                 if user.failed_logins >= MAX_FAILED:
@@ -69,6 +97,8 @@ class LoginView(APIView):
             return Response({"detail": FRIENDLY_FAIL}, status=400)
         if authed.is_archived:
             return Response({"detail": FRIENDLY_FAIL}, status=400)
+        if temp_password.expired(authed, now):  # a starting password nobody used in time stops working; the office issues a new one
+            return Response({"detail": "Your starting password has expired. Please ask the school office for a new one."}, status=400)
         authed.failed_logins, authed.locked_until = 0, None
         authed.save(update_fields=["failed_logins", "locked_until"])
         # AUTH-09: one active session. A new login replaces the old token, ending the first session.
@@ -184,10 +214,8 @@ class StudentViewSet(viewsets.ModelViewSet):
 
         d = serializer.validated_data
         taken = set(User.objects.values_list("username", flat=True))
-        obj = serializer.save(
-            username=make_username(d["first_name"], taken), role=User.Role.STUDENT, must_change_password=True,
-            password=make_password(d["index_number"]),
-        )
+        obj = serializer.save(username=make_username(d["first_name"], taken), role=User.Role.STUDENT, must_change_password=True)
+        temp_password.issue(obj)  # random starting password, printed on the credentials sheet (never the index number)
         audit(self.request.user, "student.create", obj.pk)
 
     def perform_update(self, serializer):
@@ -219,16 +247,13 @@ class StudentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="reset-password")
     def reset_password(self, request, pk=None):
         obj = self.get_object()
-        from django.contrib.auth.hashers import make_password
-
-        obj.password = make_password(obj.index_number)
-        obj.must_change_password = True
-        obj.failed_logins, obj.locked_until = 0, None
-        obj.save()
+        code = temp_password.issue(obj)
         Token.objects.filter(user=obj).delete()
         audit(request.user, "password.reset", obj.pk)
         notify_password_changed(obj, by_admin=True)
-        return Response({"ok": True, "detail": "Password reset to the index number; she must choose a new one."})
+        # shown once here and on the credentials sheet; she must choose her own password at the first login
+        return Response({"ok": True, "temporary_password": code,
+                         "detail": "A new starting password was issued (it is on the credentials sheet); she must choose a new one."})
 
     def _set_state(self, request, pk, label, **fields):
         obj = self.get_object()
@@ -322,12 +347,12 @@ def _credentials_response(users, stub, kind):
         w.writerow(["Class", "Name", "Username", "Starting password"])
         for u in users:
             w.writerow([reports.csv_safe(str(u.school_class)), reports.csv_safe(f"{u.first_name} {u.last_name}"),
-                        u.username, reports.csv_safe(u.index_number)])
+                        u.username, reports.csv_safe(temp_password.password_for(u) or "")])
         return resp
     groups = {}
     for u in users:
         groups.setdefault(str(u.school_class) if u.school_class else "No class", []).append(
-            (f"{u.first_name} {u.last_name}", u.username, u.index_number))
+            (f"{u.first_name} {u.last_name}", u.username, temp_password.password_for(u) or "-"))
     pdf = reports.credentials_pdf(SchoolSettings.load().school_name, list(groups.items()))
     resp = HttpResponse(pdf, content_type="application/pdf")
     resp["Content-Disposition"] = f'attachment; filename="{stub}.pdf"'
@@ -347,7 +372,7 @@ def bulk_credentials(request, batch_id):
         batch = BulkUploadBatch.objects.get(pk=batch_id, created_by=request.user)
     except BulkUploadBatch.DoesNotExist:
         return Response({"detail": "Upload not found."}, status=404)
-    users = _ordered(User.objects.filter(pk__in=batch.created_user_ids, must_change_password=True))
+    users = _ordered(User.objects.filter(pk__in=batch.created_user_ids, must_change_password=True, temp_issued_at__isnull=False))
     audit(request.user, "credentials.download", batch.pk)
     return _credentials_response(users, f"credentials_{batch.pk}", request.query_params.get("file"))
 
@@ -356,7 +381,8 @@ def bulk_credentials(request, batch_id):
 @permission_classes([IsAdminRole])
 def class_credentials(request):
     """Sheet for one class at any time: ?class=<id>&file=pdf|csv (students who have not yet changed their password)."""
-    users = User.objects.filter(role=User.Role.STUDENT, must_change_password=True, is_archived=False, is_active=True)
+    users = User.objects.filter(role=User.Role.STUDENT, must_change_password=True, is_archived=False, is_active=True,
+                                temp_issued_at__isnull=False)  # students whose password was set by the parents' SMS are not on the sheet
     if request.query_params.get("class"):
         users = users.filter(school_class_id=request.query_params["class"])
     audit(request.user, "credentials.download", request.query_params.get("class", "all"))
@@ -386,9 +412,8 @@ def students_bulk_action(request):
     elif action_name == "reset_passwords":
         users = list(qs)
         for u in users:  # the light starting-password hasher keeps 500 resets fast (see settings)
-            u.password = make_password(u.index_number, hasher=InitialPasswordHasher.algorithm)
-            u.must_change_password, u.failed_logins, u.locked_until = True, 0, None
-        User.objects.bulk_update(users, ["password", "must_change_password", "failed_logins", "locked_until"])
+            temp_password.issue(u, save=False)
+        User.objects.bulk_update(users, ["password", "must_change_password", "failed_logins", "locked_until", "temp_serial", "temp_issued_at"])
         Token.objects.filter(user__in=users).delete()
         audit(request.user, "students.bulk.reset_passwords", "", count=n)
     elif action_name in ("deactivate", "graduate"):

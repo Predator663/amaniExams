@@ -13,4 +13,7 @@ urlpatterns = [
     path("proctoring/relations/", views.relations),
     path("proctoring/relations/<int:relation_id>/", views.relation_delete),
     path("proctoring/exams/<int:exam_id>/unlock-all/", views.unlock_exam),
+    path("proctoring/attempts/<int:attempt_id>/lock/", views.lock_student),
+    path("proctoring/attempts/<int:attempt_id>/unlock/", views.unlock_student),
+    path("proctoring/guardians/<int:guardian_id>/reveal-phone/", views.reveal_parent_phone),
 ]

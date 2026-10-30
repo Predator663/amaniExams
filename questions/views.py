@@ -148,5 +148,6 @@ def upload_image(request):
     buf = io.BytesIO()
     img.save(buf, format="WEBP", quality=80)
     obj = QuestionImage(alt_text=alt[:300], uploaded_by=request.user)
-    obj.image.save("img.webp", ContentFile(buf.getvalue()), save=True)
+    import uuid  # unguessable file name: /media/ is served without a login, so the address itself is the secret
+    obj.image.save(f"{uuid.uuid4().hex}.webp", ContentFile(buf.getvalue()), save=True)
     return Response({"id": obj.pk, "url": obj.image.url, "alt_text": obj.alt_text}, status=201)

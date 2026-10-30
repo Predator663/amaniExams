@@ -71,6 +71,13 @@ class Attempt(models.Model):
     order = models.JSONField(default=list)  # ExamQuestion ids in this student's order
     current_index = models.PositiveIntegerField(default=0)
     seed = models.PositiveIntegerField(default=0)
+    # Lock for leaving the exam screen too often, or by hand from the live monitor. "" = not locked.
+    # The exam clock keeps running while locked. An unlock moves `leaves_forgiven` up to the number of exits so far,
+    # so the student starts again with a full allowance instead of being locked by her very next exit.
+    LOCK_LEAVES, LOCK_MANUAL = "leaves", "manual"
+    screen_lock = models.CharField(max_length=10, blank=True, default="")  # "" | leaves | manual
+    screen_locked_at = models.DateTimeField(null=True, blank=True)
+    leaves_forgiven = models.PositiveIntegerField(default=0)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["exam", "student", "attempt_no"], name="one_attempt_per_no")]

@@ -129,7 +129,7 @@ function StudentForm({ student, classes, onClose, onSaved }: { student?: any; cl
     const body = { ...f, school_class: f.school_class ? Number(f.school_class) : null };
     try {
       const r = student ? await api<any>(`/students/${student.id}/`, { method: "PATCH", body }) : await api<any>("/students/", { body });
-      onSaved(student ? "Saved." : `Created. Username: ${r.username}. Starting password: the index number.`);
+      onSaved(student ? "Saved." : `Created. Username: ${r.username}. Starting password: print it from "Username sheet".`);
     } catch (e: any) { setErrs(errorLines(e.data, e.message)); setBusy(false); }
   }
   const body = (

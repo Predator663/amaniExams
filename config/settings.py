@@ -10,8 +10,14 @@ TESTING = len(sys.argv) > 1 and sys.argv[1] == "test"
 # so it is never treated as development unless DJANGO_DEBUG=1 is set on purpose.
 RUNSERVER = len(sys.argv) > 1 and sys.argv[1] == "runserver"
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure-change-me")
+DEFAULT_SECRET_KEY = "dev-insecure-change-me"
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", DEFAULT_SECRET_KEY)
 DEBUG = os.environ.get("DJANGO_DEBUG", "1" if RUNSERVER else "0") == "1"
+# SECURITY: the production server (gunicorn) must never start with the public default key: it would let anyone forge anything
+# signed with it. Local commands (manage.py migrate, shell, tests ...) are not blocked.
+if SECRET_KEY == DEFAULT_SECRET_KEY and not DEBUG and not TESTING and "gunicorn" in os.path.basename(sys.argv[0]):
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured("Set DJANGO_SECRET_KEY to a long random value before starting the server.")
 ALLOWED_HOSTS = [h for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h]
 if RUNSERVER and DEBUG:
     ALLOWED_HOSTS = ["*"]  # development only: lets a phone on the same Wi-Fi reach http://<computer-ip>:8000
@@ -42,6 +48,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "core.middleware.SecurityHeadersMiddleware",  # nosniff, CSP for the JSON API, permissions policy
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "controlroom.middleware.MaintenanceMiddleware",  # site-wide maintenance switch; after CORS so its 503 reaches the web app
@@ -90,6 +97,16 @@ else:
 
 AUTH_USER_MODEL = "accounts.User"
 
+# Login tokens stop working this many hours after the login (the student/teacher simply logs in again).
+TOKEN_TTL_HOURS = float(os.environ.get("TOKEN_TTL_HOURS", "12"))
+# Starting passwords on the credentials sheet stop working after this many days if never used (an admin issues a new one). 0 = never.
+TEMP_PASSWORD_TTL_DAYS = float(os.environ.get("TEMP_PASSWORD_TTL_DAYS", "14"))
+
+# Security headers (SecurityMiddleware sends nosniff and the referrer policy; the clickjacking middleware sends X-Frame-Options).
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
+
 # The first hasher is the preferred one. The "initial" hasher is lighter and is used
 # only for the starting password (the index number) of bulk-uploaded students, so that
 # 500 accounts can be created in under a minute (acceptance test). Django re-hashes with
@@ -128,7 +145,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "core.pagination.OptionalPagination",  # pages only when ?page= is sent
-    "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.TokenAuthentication"],
+    "DEFAULT_AUTHENTICATION_CLASSES": ["accounts.authentication.ExpiringTokenAuthentication"],  # tokens die after TOKEN_TTL_HOURS
+    # SECURITY: how many reverse proxies sit in front of Django (Render = 1). DRF then takes the client address from the right place
+    # in X-Forwarded-For, so the login throttle cannot be dodged by sending a made-up header. 0 = no proxy (local development).
+    "NUM_PROXIES": int(os.environ.get("NUM_PROXIES", "0" if (RUNSERVER or TESTING) else "1")),
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
         "accounts.permissions.NotForcedPasswordChange",

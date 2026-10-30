@@ -28,7 +28,7 @@ function render(d){
   fill('audit',['#','Entry','Details'],d.audit.rows.map(function(r){return [r.id,r.label,Object.keys(r.values).map(function(k){return k+'='+r.values[k]}).join(' | ')]}))}
  fill('logins',['User','When'],d.recent_logins.map(function(r){return [r.user,fmt(r.at)]}));
  fill('alog',['When','User','What'],d.admin_log.map(function(r){return [fmt(r.at),r.user,r.what]}));
- fill('counts',['Table','Rows'],d.counts.map(function(r){return [{text:r.label,href:"{% url 'controlroom:tables' %}"+r.label+"/"},r.count]}));
+ fill('counts',['Table','Rows','Admin'],d.counts.map(function(r){return [{text:r.label,href:"{% url 'controlroom:tables' %}"+r.label+"/"},r.count,r.admin_url?{text:'manage',href:r.admin_url}:'']}));
 }
 function load(){fetch(URL,{credentials:'same-origin'}).then(function(r){return r.json()}).then(render).catch(function(){})}
 load();setInterval(load,10000);

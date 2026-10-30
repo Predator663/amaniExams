@@ -1,9 +1,11 @@
 from django.contrib.auth import get_user_model
+from django.apps import apps
 from django.core.management import call_command
 from django.test import TestCase, override_settings
+from django.urls import reverse
 from rest_framework.authtoken.models import Token
 
-from . import state
+from . import eye, state
 from .models import ControlEvent, SiteControl
 
 PW = "Pw12345!xyz"
@@ -153,3 +155,111 @@ class ControlRoomTests(TestCase):
         self.assertTrue(SiteControl.get().maintenance)
         call_command("maintenance", "off")
         self.assertFalse(SiteControl.get().maintenance)
+
+
+@override_settings(CONTROLROOM_OWNERS="goose", STORAGES=PLAIN_STATIC)
+class ControlRoomAdminTests(TestCase):
+    """Control events + every model in the admin (owner only)."""
+
+    def setUp(self):
+        U = get_user_model()
+        self.owner = U.objects.create_superuser("goose", "g@x.tz", PW)
+        self.other = U.objects.create_superuser("other", "o@x.tz", PW)
+        state.reset_cache()
+
+    def tearDown(self):
+        state.reset_cache()
+
+    def _event(self):
+        return ControlEvent.objects.create(who="goose", action="maintenance_on", detail="x" * 300, ip="203.0.113.5")
+
+    def test_control_event_list_and_row_open_for_owner(self):
+        ev = self._event()
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.get(reverse("admin:controlroom_controlevent_changelist")).status_code, 200)
+        # opening a row used to crash: has_view_permission was called with the row but did not accept it
+        self.assertEqual(self.client.get(reverse("admin:controlroom_controlevent_change", args=[ev.pk])).status_code, 200)
+
+    def test_control_events_cannot_be_edited_or_removed(self):
+        ev = self._event()
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.get(reverse("admin:controlroom_controlevent_add")).status_code, 403)
+        self.assertEqual(self.client.post(reverse("admin:controlroom_controlevent_change", args=[ev.pk]), {"who": "evil"}).status_code, 403)
+        self.assertEqual(self.client.post(reverse("admin:controlroom_controlevent_delete", args=[ev.pk]), {"post": "yes"}).status_code, 403)
+        ev.refresh_from_db()
+        self.assertEqual(ev.who, "goose")
+
+    def test_control_events_hidden_from_other_superuser(self):
+        ev = self._event()
+        self.client.force_login(self.other)
+        self.assertEqual(self.client.get(reverse("admin:controlroom_controlevent_changelist")).status_code, 403)
+        self.assertEqual(self.client.get(reverse("admin:controlroom_controlevent_change", args=[ev.pk])).status_code, 403)
+
+    def test_event_records_visitor_address_behind_proxy(self):
+        self.client.force_login(self.owner)
+        self.client.post("/controlroom/maintenance/off/", HTTP_X_FORWARDED_FOR="203.0.113.7, 10.0.0.1")
+        self.assertEqual(ControlEvent.objects.latest("id").ip, "203.0.113.7")
+        self.client.post("/controlroom/maintenance/off/", HTTP_X_FORWARDED_FOR="not an address")
+        self.assertEqual(ControlEvent.objects.latest("id").ip, "127.0.0.1")  # falls back to the connection address
+
+    def test_shell_command_records_details(self):
+        call_command("maintenance", "on", "--message", "Upgrade", "--back-at", "18:00")
+        ev = ControlEvent.objects.latest("id")
+        self.assertEqual(ev.who, "shell")
+        self.assertIn("Upgrade", ev.detail)
+        self.assertIn("18:00", ev.detail)
+
+    def test_every_model_is_in_the_admin(self):
+        from django.contrib import admin
+        skipped = {"authtoken.token", "sessions.session"}  # a token / session key is the credential itself
+        missing = [m._meta.label_lower for m in eye.all_models()
+                   if m._meta.label_lower not in skipped and not admin.site.is_registered(m)]
+        self.assertEqual(missing, [])
+        for label in skipped:
+            self.assertFalse(admin.site.is_registered(apps.get_model(label)), label)
+
+    def test_every_admin_list_opens_for_owner_and_not_for_others(self):
+        from django.contrib import admin
+        from .admin import OwnerReadOnlyAdmin
+        self.client.force_login(self.owner)
+        other = self.client_class()
+        other.force_login(self.other)
+        checked = 0
+        for m, ma in admin.site._registry.items():
+            url = reverse(f"admin:{m._meta.app_label}_{m._meta.model_name}_changelist")
+            if m is SiteControl:
+                self.assertEqual(self.client.get(url).status_code, 302, url)  # opens the control room
+                continue
+            self.assertEqual(self.client.get(url).status_code, 200, url)
+            if isinstance(ma, OwnerReadOnlyAdmin):
+                self.assertEqual(other.get(url).status_code, 403, url)
+            checked += 1
+        self.assertGreater(checked, 20)
+
+    def test_secret_columns_are_not_in_the_admin(self):
+        from django.contrib import admin
+        for label, hidden in (("guardians.smsdevice", "token_hash"), ("guardians.guardian", "phone_enc"),
+                              ("notifications.pushsubscription", "p256dh")):
+            ma = admin.site._registry[apps.get_model(label)]
+            self.assertIn(hidden, ma.exclude, label)
+            self.assertNotIn(hidden, ma.list_display, label)
+            self.assertFalse(ma.has_add_permission(self._request()), label)  # cannot be created by hand
+
+    def _request(self):
+        from django.test import RequestFactory
+        r = RequestFactory().get("/")
+        r.user = self.owner
+        return r
+
+    def test_tables_page_links_to_admin(self):
+        self.client.force_login(self.owner)
+        html = self.client.get("/controlroom/eye/tables/").content.decode()
+        self.assertIn("/django-admin/controlroom/controlevent/", html)
+        self.assertIn("/django-admin/exams/exam/", html)
+        self.assertIn("/django-admin/controlroom/controlevent/", self.client.get("/controlroom/").content.decode())
+
+    def test_session_keys_are_never_listed(self):
+        self.client.force_login(self.owner)
+        key = self.client.session.session_key
+        self.assertTrue(key)
+        self.assertNotIn(key.encode(), self.client.get("/controlroom/eye/tables/sessions.session/").content)

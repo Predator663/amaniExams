@@ -26,6 +26,8 @@ class SchoolSettings(models.Model):
     default_language = models.CharField(max_length=2, default="en")
     proximity_alert_meters = models.FloatField(default=20)  # anti-cheat: two students closer than this raise an alert
     proximity_lock_enabled = models.BooleanField(default=False)  # anti-cheat: also lock both students' exam screens until an admin unlocks
+    leave_lock_enabled = models.BooleanField(default=True)  # anti-cheat: lock a student's exam once she has left the exam screen more than leave_lock_limit times
+    leave_lock_limit = models.PositiveSmallIntegerField(default=3)  # how many times she may leave; the next time locks her until an admin unlocks
 
     def save(self, *args, **kwargs):
         self.pk = 1

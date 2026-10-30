@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from accounts.models import User
 from core.models import SchoolSettings, audit
-from exams.models import Attempt
+from exams.models import Attempt, AttemptEvent
 from . import geo, spoof
 from .models import IntegrityFlag, LegalAcceptance, LiveLocation, ProximityAlert, StudentRelation
 
@@ -341,8 +341,101 @@ def locking_alert(exam_id, student_id):
             .filter(Q(a_id=student_id) | Q(b_id=student_id)).select_related("a", "b").first())
 
 
+def lock_reason(exam_id, student_id):
+    """Why this student's exam screen is locked right now: "close" (sitting too near another student), "leaves" (left the
+    exam screen too often) or "manual" (an administrator locked her), or None when she is free to write.
+    Switching a lock type off in Settings releases the students held by it (manual locks are not a setting, they stay)."""
+    if locking_alert(exam_id, student_id):
+        return "close"
+    held = (Attempt.objects.filter(exam_id=exam_id, student_id=student_id, status=Attempt.IN_PROGRESS).exclude(screen_lock="")
+            .order_by("-attempt_no").values_list("screen_lock", flat=True).first())
+    if held == Attempt.LOCK_LEAVES and not leave_lock_on():
+        return None
+    return held or None
+
+
 def is_locked(exam_id, student_id):
-    return locking_alert(exam_id, student_id) is not None
+    return lock_reason(exam_id, student_id) is not None
+
+
+# ------------------------------------------------- leaving the exam screen: automatic and manual lock
+
+def leave_lock_on():
+    """True when students who leave the exam screen more than the allowed number of times are locked automatically."""
+    return bool(SchoolSettings.load().leave_lock_enabled)
+
+
+def leave_limit():
+    """How many times a student may leave the exam screen. The exit after that locks her."""
+    return int(SchoolSettings.load().leave_lock_limit)
+
+
+def leaves_total(attempt_id):
+    return AttemptEvent.objects.filter(attempt_id=attempt_id, kind="left_screen").count()
+
+
+def leave_status(attempt):
+    """What the student's phone and the monitor show: exits counted since the last unlock, the allowed number, auto-lock on/off."""
+    cfg = SchoolSettings.load()
+    return {"used": max(0, leaves_total(attempt.pk) - attempt.leaves_forgiven), "limit": int(cfg.leave_lock_limit), "enabled": bool(cfg.leave_lock_enabled)}
+
+
+def note_leave(attempt_id, now=None):
+    """Call after a `left_screen` event was saved. Locks the attempt when she has now left MORE times than the limit
+    (limit 3 = three exits are fine, the fourth locks). Returns (locked_now, status). The clock keeps running."""
+    now = now or timezone.now()
+    cfg = SchoolSettings.load()
+    with transaction.atomic():
+        attempt = Attempt.objects.select_for_update().select_related("exam", "student").get(pk=attempt_id)
+        used = max(0, leaves_total(attempt.pk) - attempt.leaves_forgiven)
+        status = {"used": used, "limit": int(cfg.leave_lock_limit), "enabled": bool(cfg.leave_lock_enabled)}
+        if attempt.status != Attempt.IN_PROGRESS or not cfg.leave_lock_enabled or attempt.screen_lock or used <= cfg.leave_lock_limit:
+            return False, status
+        attempt.screen_lock, attempt.screen_locked_at = Attempt.LOCK_LEAVES, now
+        attempt.save(update_fields=["screen_lock", "screen_locked_at"])
+        audit(None, "leave_lock", f"attempt {attempt.pk}", exam=attempt.exam_id, student=attempt.student_id, left=used, limit=int(cfg.leave_lock_limit))
+    _notify_leave_lock(attempt, used, int(cfg.leave_lock_limit), now)
+    return True, status
+
+
+def lock_attempt(attempt_id, admin, now=None):
+    """An administrator locks one student's exam by hand. Returns True when it locked now."""
+    now = now or timezone.now()
+    with transaction.atomic():
+        attempt = Attempt.objects.select_for_update().get(pk=attempt_id)
+        if attempt.status != Attempt.IN_PROGRESS or attempt.screen_lock:
+            return False
+        attempt.screen_lock, attempt.screen_locked_at = Attempt.LOCK_MANUAL, now
+        attempt.save(update_fields=["screen_lock", "screen_locked_at"])
+        audit(admin, "attempt_lock", f"attempt {attempt.pk}", exam=attempt.exam_id, student=attempt.student_id)
+    return True
+
+
+def unlock_attempt(attempt_id, admin, now=None):
+    """Let one locked student carry on. After a lock for leaving the screen she starts again with a full allowance
+    (her earlier exits stay on the record but no longer count towards the limit). Returns True if she was locked."""
+    with transaction.atomic():
+        attempt = Attempt.objects.select_for_update().get(pk=attempt_id)
+        if not attempt.screen_lock:
+            return False
+        was = attempt.screen_lock
+        attempt.screen_lock, attempt.screen_locked_at = "", None
+        fields = ["screen_lock", "screen_locked_at"]
+        if was == Attempt.LOCK_LEAVES:
+            attempt.leaves_forgiven = leaves_total(attempt.pk)
+            fields.append("leaves_forgiven")
+        attempt.save(update_fields=fields)
+        audit(admin, "attempt_unlock", f"attempt {attempt.pk}", exam=attempt.exam_id, student=attempt.student_id, was=was)
+    return True
+
+
+def _notify_leave_lock(attempt, used, limit, now):
+    from notifications.services import notify
+    admins = list(User.objects.filter(role__in=["admin", "super_admin"], is_active=True))
+    body = (f"{name_of(attempt.student)} left the exam screen {used} times (allowed: {limit}) during “{attempt.exam.title}”. "
+            "Her exam is locked until you unlock it. Open Live monitor.")
+    notify(admins, "integrity_alert", "Exam locked: left the screen too often", body, key=f"leave:{attempt.pk}:{int(now.timestamp())}",
+           data={"exam_id": attempt.exam_id, "attempt_id": attempt.pk}, push=True)
 
 
 def unlock(alert, admin, now=None):
@@ -359,6 +452,8 @@ def unlock_all(exam_id, admin, now=None):
     n = 0
     for al in ProximityAlert.objects.filter(exam_id=exam_id, locked=True, unlocked_at__isnull=True).select_related("a", "b"):
         n += unlock(al, admin, now)
+    for a in Attempt.objects.filter(exam_id=exam_id, status=Attempt.IN_PROGRESS).exclude(screen_lock=""):
+        n += unlock_attempt(a.pk, admin, now)
     return n
 
 

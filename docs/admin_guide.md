@@ -55,6 +55,13 @@ See `PARENTS_SMS.md` for how to upload parents' phone numbers, link them to stud
 - Rough positions (indoors, weak sky view) only raise an alert, they never lock. Switching the option off releases everyone who is locked. Locks and unlocks are written to the audit log (`proximity_lock`, `proximity_unlock`).
 
 
+### Leaving the exam screen: count, automatic lock, manual lock
+- Every time a student switches app, tab or screen during an exam it is counted and shown in **Live monitor → Writing** (for example *left screen ×2 (2/3 allowed)*).
+- **Settings → School → Anti-cheat: leaving the exam screen** has two controls: the automatic lock (on by default) and **Times she may leave** (default 3, you can set 0–50). With 3, the first three exits only warn her on screen; the fourth locks her exam. A locked student sees a lock screen, cannot answer, and her timer keeps running (no extra time). Her answers are safe.
+- Administrators are notified when someone is locked this way. In **Live monitor → Writing** a locked student shows 🔒 and an **Unlock** button; every writing student has a **Lock** button for a manual lock (the lock stays until you unlock, whatever the settings).
+- **Unlock** gives her a fresh allowance (her earlier exits stay on the record but no longer count). **Unlock all** in the Anti-cheat tab also releases these locks. Switching the automatic lock off releases students locked by it; manual locks stay.
+- Leaving the screen can be innocent (a phone call, a notification that pulls the app away). Look at the count and talk to the student before you decide; the lock is a prompt for you, not a verdict.
+
 ### Device and position checks (Live monitor → Anti-cheat → "Device and position checks")
 These are signs to look at, never proof. Nothing is blocked or changed automatically; you review each one and press **Mark reviewed**
 (if the same sign happens again it shows up again). *High* and *check* flags page the administrators once; *info* flags do not.

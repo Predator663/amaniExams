@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import { errorLines } from "@/lib/staff";
 import { useSession } from "@/lib/session";
 
-const THEMES = ["light", "dark", "high_contrast", "colour_blind", "soft"];
+const THEMES = ["light", "dark", "high_contrast", "colour_blind", "soft", "mw3"];
 const NECTA = { grades: [
   { grade: "A", min: 75, max: 100, meaning: "Excellent", points: 1 }, { grade: "B", min: 65, max: 74, meaning: "Very good", points: 2 }, { grade: "C", min: 45, max: 64, meaning: "Good", points: 3 },
   { grade: "D", min: 30, max: 44, meaning: "Satisfactory (pass)", points: 4 }, { grade: "F", min: 0, max: 29, meaning: "Fail", points: 5 }],
@@ -53,6 +53,12 @@ function School() {
       <p className="muted small">Two students of the same exam closer than this raise an alert in Live monitor → Anti-cheat. Phones indoors are only accurate to about 5–15 m, so very small values can miss real cases.</p>
       <label className="switch"><input type="checkbox" checked={!!v.proximity_lock_enabled} onChange={(e) => up({ proximity_lock_enabled: e.target.checked })} /> Lock the exam of students who sit closer than this distance</label>
       <p className="muted small">Both students see a banner telling them to move apart and cannot answer until an administrator unlocks them in Live monitor → Anti-cheat. Their exam timer keeps running. Only precise positions lock a screen; rough ones only alert you. Switching this off releases everyone who is locked.</p>
+      <h3 style={{ marginTop: "1rem" }}>Anti-cheat: leaving the exam screen</h3>
+      <label className="switch"><input type="checkbox" checked={v.leave_lock_enabled ?? true} onChange={(e) => up({ leave_lock_enabled: e.target.checked })} /> Lock a student automatically when she leaves the exam screen too often</label>
+      <div className="grid2">
+        <label className="field"><span>Times she may leave (the next exit locks her)</span><input className="input" type="number" min={0} max={50} step={1} value={v.leave_lock_limit ?? 3} onChange={(e) => up({ leave_lock_limit: Number(e.target.value) })} /></label>
+      </div>
+      <p className="muted small">Every time a student switches app, tab or screen during an exam it is counted and shown in Live monitor. With 3, the first three exits only warn her; the fourth locks her exam until you unlock her there. Her timer keeps running. Unlocking gives her a fresh allowance. You can also lock or unlock any student by hand in Live monitor. Switching this off releases students locked this way (hand locks stay).</p>
       <label className="switch"><input type="checkbox" checked={v.leaderboard_enabled} onChange={(e) => up({ leaderboard_enabled: e.target.checked })} /> Class leaderboard (XP only)</label>
       <label className="switch"><input type="checkbox" checked={v.show_class_position} onChange={(e) => up({ show_class_position: e.target.checked })} /> Show class position on results</label>
       <Msg errs={errs} ok={ok} /><button className="btn primary" onClick={save}>Save settings</button>

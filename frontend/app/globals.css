@@ -692,3 +692,54 @@ select.input.sm{padding:.25rem .4rem;font-size:.85rem;width:auto;min-height:0}
 .chip{display:inline-flex;gap:.35rem;align-items:center;padding:.15rem .3rem .15rem .65rem;border-radius:999px;background:rgba(42,139,242,.14)}
 .chip button{border:0;background:transparent;cursor:pointer;color:inherit;padding:0 .3rem}
 :root[data-theme=high_contrast] .ac-rel line{stroke:#ff0}
+
+/* ===================================================================================================================
+   Operator card + footer credit (all themes)
+   =================================================================================================================== */
+.op-card{display:flex;gap:1rem;align-items:center;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem;margin:0 0 1rem}
+.op-frame{position:relative;width:120px;height:120px;flex:none;border-radius:10px;overflow:hidden;border:2px solid var(--primary);background:#000}
+.op-frame img{display:block;width:100%;height:100%;object-fit:cover;object-position:50% 38%}
+.op-info{min-width:0}.op-info p{margin:.2rem 0}.op-name{margin:.1rem 0 .2rem}
+.op-tag{display:inline-block;padding:.1rem .55rem;border:1px solid var(--primary);color:var(--primary);font-size:.72rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
+.op-call b{letter-spacing:.14em;color:var(--primary)}
+.op-links{display:flex;flex-wrap:wrap;gap:.2rem 1.1rem;word-break:break-all}.op-links a{min-height:36px;display:inline-flex;align-items:center}
+.foot-op{display:inline-flex;align-items:center;gap:.5rem;color:var(--muted);text-decoration:none;font-size:.85rem;min-height:36px}
+.foot-op img{border-radius:50%;object-fit:cover;object-position:50% 30%;border:1px solid var(--primary)}
+.foot-op:hover span{text-decoration:underline}.foot-op b{letter-spacing:.1em;color:var(--primary)}
+
+/* ===================================================================================================================
+   Theme: Call of Duty - Modern Warfare III (data-theme="mw3"): gunmetal, amber HUD accent, angular corners, condensed caps headings.
+   Colours are variables like every other theme, so each screen picks it up; contrast of text on every surface stays above 7:1.
+   =================================================================================================================== */
+:root[data-theme=mw3]{--bg:#0a0d0b;--surface:#121713;--text:#e9eee7;--muted:#a5b0a2;--primary:#ffb400;--on-primary:#0a0d0b;--border:#2e382f;--bad:#ff6a5c;--good:#8dff5c;--warn:#ffb400;--soft:#1a221c;--r:3px;
+--font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--hud:"Bahnschrift","Rajdhani","Oswald","Roboto Condensed","Arial Narrow",system-ui,sans-serif;
+--side-bg:#050706;--side-text:#aeb9ab;--side-on:#ffb400;--side-hover:rgba(255,180,0,.08);--side-active-bg:rgba(255,180,0,.16);--side-active-text:#ffb400;--side-border:rgba(255,180,0,.2);--shadow:0 0 0 1px rgba(255,180,0,.08);color-scheme:dark}
+:root[data-theme=mw3] body{background:radial-gradient(1200px 600px at 85% -10%,rgba(255,180,0,.07),transparent 60%),radial-gradient(900px 500px at -10% 110%,rgba(80,110,70,.12),transparent 60%),var(--bg)}
+:root[data-theme=mw3] h1,:root[data-theme=mw3] h2,:root[data-theme=mw3] h3,:root[data-theme=mw3] .brand,:root[data-theme=mw3] .pill,:root[data-theme=mw3] .btn,
+:root[data-theme=mw3] .bottom a small,:root[data-theme=mw3] .op-tag{font-family:var(--hud);text-transform:uppercase;letter-spacing:.07em}
+:root[data-theme=mw3] h1,:root[data-theme=mw3] h2{font-weight:700}
+:root[data-theme=mw3] h2{border-left:4px solid var(--primary);padding-left:.6rem}
+:root[data-theme=mw3] .card,:root[data-theme=mw3] .op-card,:root[data-theme=mw3] .stat,:root[data-theme=mw3] .modal{border-radius:var(--r);border:1px solid var(--border);border-left:3px solid var(--primary);background:linear-gradient(180deg,rgba(255,255,255,.025),transparent 40%),var(--surface)}
+:root[data-theme=mw3] .card.error{border-left-color:var(--bad)}
+:root[data-theme=mw3] .card.hero{background:var(--primary);border:0}
+:root[data-theme=mw3] .btn{border-radius:2px;border-width:2px;font-weight:700}
+:root[data-theme=mw3] .btn.primary{box-shadow:0 0 0 1px rgba(0,0,0,.4),0 0 16px rgba(255,180,0,.25)}
+:root[data-theme=mw3] .btn:hover{border-color:var(--primary)}
+:root[data-theme=mw3] .btn.danger{border-color:var(--bad);color:var(--bad)}
+:root[data-theme=mw3] .input,:root[data-theme=mw3] select.input,:root[data-theme=mw3] .opt,:root[data-theme=mw3] .chip{border-radius:2px;background:#0d120e}
+:root[data-theme=mw3] .chip,:root[data-theme=mw3] .pill{border-radius:2px}
+:root[data-theme=mw3] .top{border-bottom:2px solid var(--primary);background:#080b09}
+:root[data-theme=mw3] .logo{border-radius:2px}
+:root[data-theme=mw3] .bar,:root[data-theme=mw3] .bar i{border-radius:0}
+:root[data-theme=mw3] .timer{font-family:var(--hud);letter-spacing:.06em;color:var(--primary)}
+:root[data-theme=mw3] .timer.low{color:var(--bad)}
+:root[data-theme=mw3] .op-frame{border-radius:0;clip-path:polygon(0 0,calc(100% - 18px) 0,100% 18px,100% 100%,18px 100%,0 calc(100% - 18px));border:0;box-shadow:none;outline:2px solid var(--primary);outline-offset:-2px}
+:root[data-theme=mw3] .op-name{font-family:var(--hud);font-size:1.6rem;letter-spacing:.06em}
+:root[data-theme=mw3] .foot{background:#070a08;border-top:2px solid var(--primary)}
+:root[data-theme=mw3] .foot-op img{border-radius:0}
+@media(prefers-reduced-motion:no-preference){:root[data-theme=mw3]:not(.reduce-motion) .btn.primary{transition:box-shadow .2s}:root[data-theme=mw3]:not(.reduce-motion) .btn.primary:hover{box-shadow:0 0 0 1px rgba(0,0,0,.4),0 0 24px rgba(255,180,0,.45)}}
+
+/* leave-screen lock: monitor + student banner */
+.lb-locked{color:var(--danger,#d92d3a);font-style:normal;font-weight:600}
+.lb-lockbtn{width:max-content;margin-top:.2rem}
+.leave-banner{display:flex;gap:.6rem;align-items:center;justify-content:space-between}

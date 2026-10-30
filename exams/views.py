@@ -6,9 +6,10 @@ from django.db.models import Avg, Count, Max, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers, viewsets
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 
 from academics.models import TeacherAssignment
 from accounts.models import User
@@ -131,14 +132,29 @@ def attempt_finish(request, attempt_id):
     return Response(services.attempt_state(Attempt.objects.select_related("exam").get(pk=attempt.pk)))
 
 
+class AttemptEventThrottle(UserRateThrottle):
+    """SECURITY: the leave-screen endpoint writes a row per call. A real student leaves the screen a handful of times;
+    this stops a script from filling the table. The rate is set here so no settings change is needed."""
+    scope = "attempt_event"
+    rate = "30/min"
+
+
 @api_view(["POST"])
 @permission_classes([IsStudent])
+@throttle_classes([AttemptEventThrottle])
 def attempt_event(request, attempt_id):
     attempt = _own_attempt(request, attempt_id)
     kind = request.data.get("kind")
-    if attempt.status == Attempt.IN_PROGRESS and kind in ("left_screen", "returned"):
-        AttemptEvent.objects.create(attempt=attempt, kind=kind)
-    return Response({"ok": True})
+    if attempt.status != Attempt.IN_PROGRESS or kind not in ("left_screen", "returned"):
+        return Response({"ok": True})
+    AttemptEvent.objects.create(attempt=attempt, kind=kind)
+    if kind == "left_screen":
+        locked_now, status = proctoring.note_leave(attempt.pk)  # one more exit; locks her when it goes over the limit
+    else:
+        locked_now, status = False, proctoring.leave_status(attempt)
+    reason = proctoring.lock_reason(attempt.exam_id, request.user.pk)
+    return Response({"ok": True, "locked": reason is not None, "lock_reason": reason or "", "locked_now": locked_now,
+                     "left": status["used"], "limit": status["limit"], "auto_lock": status["enabled"]})
 
 
 def _visible_result_or_404(request, attempt_id):
@@ -613,9 +629,20 @@ def _ts(obj, *names):
     return None
 
 
+def mask_phone(phone):
+    """+255712345678 -> +255•••••678 : enough to recognise a number, not enough to copy it."""
+    p = str(phone or "")
+    digits = sum(c.isdigit() for c in p)
+    if digits <= 6:
+        return "•" * len(p)
+    keep_head = p[:4] if p.startswith("+") else p[:0]
+    return keep_head + "•" * max(3, len(p) - len(keep_head) - 3) + p[-3:]
+
+
 def _parents(students, cache=None):
-    """{student_id: [{name, phone, relationship}]} from the Parents page (encrypted at rest, decrypted
-    here for administrators only). `cache` lets one board request decrypt each guardian once."""
+    """{student_id: [{id, name, phone (MASKED), relationship}]} from the Parents page (encrypted at rest).
+    SECURITY: the live monitor polls every few seconds, so it never carries a full number. An administrator taps
+    "Show number", which calls proctoring reveal-phone and is written to the audit log."""
     cache = {} if cache is None else cache
     out = {}
     try:
@@ -624,7 +651,7 @@ def _parents(students, cache=None):
         for link in GuardianLink.objects.filter(student_id__in=ids).select_related("guardian").order_by("id"):
             g = link.guardian
             if g.pk not in cache:
-                cache[g.pk] = {"name": g.name, "phone": g.phone, "relationship": g.relationship}
+                cache[g.pk] = {"id": g.pk, "name": g.name, "phone": mask_phone(g.phone), "relationship": g.relationship}
             out.setdefault(link.student_id, []).append(cache[g.pk])
     except Exception:
         logging.getLogger(__name__).exception("parent lookup failed")
@@ -661,6 +688,8 @@ def _monitor_exam(exam, user, now, online, cache=None):
     data["proximity_alerts"] = exam.proximity_alerts.filter(active=True, acknowledged_at__isnull=True).count()
     flags = dict(AttemptEvent.objects.filter(attempt__exam=exam, kind="left_screen")
                  .values_list("attempt__student_id").annotate(n=Count("id")))
+    left_now = dict(AttemptEvent.objects.filter(attempt__exam=exam, attempt__status=Attempt.IN_PROGRESS, kind="left_screen")
+                    .values_list("attempt_id").annotate(n=Count("id")))  # exits per running attempt (the lock counts these)
     answered = dict(Answer.objects.filter(attempt__exam=exam, skipped=False).values_list("attempt_id").annotate(n=Count("id")))  # skipped questions do not count as answered
     parents = _parents(by_id.values(), cache)
 
@@ -675,9 +704,13 @@ def _monitor_exam(exam, user, now, online, cache=None):
         r.update(extra or {})
         return r
 
+    leave_cfg = SchoolSettings.load()
+    data["leave_lock"] = {"enabled": bool(leave_cfg.leave_lock_enabled), "limit": int(leave_cfg.leave_lock_limit)}
     data["in_progress_students"] = sorted((row(a, {
         "seconds_left": max(0, int((a.deadline_at - now).total_seconds())),
-        "online": a.student_id in online}) for a in live), key=lambda r: (r["class"], r["name"]))
+        "online": a.student_id in online,
+        "attempt_id": a.pk, "leaves_used": max(0, left_now.get(a.pk, 0) - a.leaves_forgiven),
+        "locked": bool(a.screen_lock), "lock_reason": a.screen_lock or ""}) for a in live), key=lambda r: (r["class"], r["name"]))
     data["submitted_students"] = sorted((row(a, {
         "submitted_at": _ts(a, "submitted_at", "finished_at", "ended_at"),
         "auto_submitted": a.status == Attempt.AUTO_SUBMITTED,

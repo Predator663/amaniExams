@@ -91,8 +91,8 @@ def credentials_pdf(school, groups):
         story += [
             Paragraph(escape(school), H1),
             Paragraph(f"Login details - {escape(label)}", H2),
-            Paragraph("Keep this sheet private. Your starting password is your index number; "
-                      "you must choose a new password the first time you log in.", SMALL),
+            Paragraph("Keep this sheet private. Log in with your username and the starting password in the last column, "
+                      "then choose a new password of your own. The starting password stops working if it is not used in time.", SMALL),
             Spacer(1, 3 * mm),
             _grid(["#", "Name", "Username", "Starting password"],
                   [[n, name, user, pw] for n, (name, user, pw) in enumerate(rows, 1)],

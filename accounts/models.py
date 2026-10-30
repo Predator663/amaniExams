@@ -3,7 +3,7 @@ from django.contrib.auth.models import AbstractUser, UserManager
 from django.db import models
 
 
-THEMES = {"light", "dark", "high_contrast", "colour_blind", "soft"}  # ACC-01
+THEMES = {"light", "dark", "high_contrast", "colour_blind", "soft", "mw3"}  # ACC-01
 
 
 class AmaniUserManager(UserManager):
@@ -30,6 +30,8 @@ class User(AbstractUser):
         "academics.SchoolClass", null=True, blank=True, on_delete=models.SET_NULL, related_name="students"
     )
     must_change_password = models.BooleanField(default=False)
+    temp_serial = models.PositiveIntegerField(default=0)  # counts the starting passwords issued to her (see accounts/temp_password.py)
+    temp_issued_at = models.DateTimeField(null=True, blank=True)  # when the current starting password was issued; empty = not issued that way
     is_archived = models.BooleanField(default=False)  # ADM-01: delete = archive, restorable
     failed_logins = models.PositiveSmallIntegerField(default=0)
     locked_until = models.DateTimeField(null=True, blank=True)

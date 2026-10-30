@@ -130,8 +130,10 @@ function Runner({ attemptId }: { attemptId: number }) {
   const flushing = useRef(false), fired = useRef<Set<number>>(new Set()), finishing = useRef(false);
   const now = useNow(250);
   const proctor = useProctor(st && !st.finished ? attemptId : null);  // sends the position every few seconds while the exam runs
-  const { markLocked } = proctor;
-  const locked = proctor.locked ?? !!st?.locked;  // too close to another student: an administrator must unlock; the clock keeps running
+  const { markLocked, applyLock } = proctor;
+  const locked = proctor.locked ?? !!st?.locked;  // too close to another student, left the screen too often, or locked by hand: an administrator must unlock; the clock keeps running
+  const lockReason = proctor.lockReason || st?.lock_reason || "close";  // close | leaves | manual
+  const [leaveMsg, setLeaveMsg] = useState("");
 
   useEffect(() => { setSound(localStorage.getItem("amani_sound") !== "off"); }, []);
 
@@ -206,6 +208,20 @@ function Runner({ attemptId }: { attemptId: number }) {
     wasLocked.current = locked;
   }, [locked, flush, reload]);
 
+  // The server withholds the question while locked; if the screen is not locked but has no question yet, fetch it.
+  useEffect(() => {
+    if (st && !st.finished && !st.question && !locked) reload();
+  }, [st, locked, reload]);
+
+  // While locked, ask the server every few seconds whether an administrator has unlocked us (works even if location reports are off).
+  useEffect(() => {
+    if (!locked || !attemptId) return;
+    const iv = setInterval(async () => {
+      try { const s = await api<AttemptState>(`/attempts/${attemptId}/`); if (s && !s.locked) { applyLock(false); setLeaveMsg(""); } } catch { /* offline: try again */ }
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [locked, attemptId, applyLock]);
+
   // EDAY-05: the countdown is only a display of server time; at zero we ask the server to close the attempt.
   const remainingMs = st && !st.finished ? new Date(st.deadline_at).getTime() - (now + offset) : 0;
   useEffect(() => { if (st && !st.finished && remainingMs <= 0) { setTimeOver(true); finishNow(); } }, [st, remainingMs, finishNow]);
@@ -229,14 +245,36 @@ function Runner({ attemptId }: { attemptId: number }) {
   // EDAY-11: leaving the exam screen is logged as information for staff. Copy/paste/right-click are blocked below.
   useEffect(() => {
     if (!st || st.finished) return;
-    const onVis = () => { api(`/attempts/${attemptId}/event/`, { body: { kind: document.hidden ? "left_screen" : "returned" }, keepalive: true }).catch(() => {}); };
+    // The server counts every exit. Over the allowed number it locks the exam and says so in the reply; the reply also tells
+    // her how many exits she has used, so she is warned before the lock and not only after it.
+    // Hidden tab, minimised app and (as extra signals) the window losing focus or being hidden: split-screen and floating windows do
+    // not always fire visibilitychange. `away` makes sure each exit is reported once, and a short delay on blur ignores a blink.
+    let away = false, blurTimer: ReturnType<typeof setTimeout> | undefined;
+    const send = (kind: "left_screen" | "returned") => {
+      if ((kind === "left_screen") === away) return;  // already reported
+      away = kind === "left_screen";
+      api<{ locked?: boolean; lock_reason?: string; left?: number; limit?: number; auto_lock?: boolean }>(`/attempts/${attemptId}/event/`, { body: { kind }, keepalive: true })
+        .then((r) => {
+          if (!r) return;
+          if (r.locked) { markLocked(r.lock_reason || "leaves"); setLeaveMsg(""); return; }
+          if (r.auto_lock && (r.left ?? 0) > 0 && !document.hidden) {
+            const n = r.left ?? 0, max = r.limit ?? 3;
+            setLeaveMsg(n >= max ? t("leave_warn_last", { n }) : t("leave_warn", { n, max }));
+          }
+        }).catch(() => {});
+    };
+    const onVis = () => send(document.hidden ? "left_screen" : "returned");
+    const onBlur = () => { clearTimeout(blurTimer); blurTimer = setTimeout(() => { if (!document.hasFocus()) send("left_screen"); }, 1500); };
+    const onFocus = () => { clearTimeout(blurTimer); if (!document.hidden) send("returned"); };
+    const onHide = () => send("left_screen");
     document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("blur", onBlur); window.addEventListener("focus", onFocus); window.addEventListener("pagehide", onHide);
     // EDAY-04: the back button must not take her to earlier questions or out of the exam by accident.
     history.pushState(null, "", location.href);
     const onPop = () => history.pushState(null, "", location.href);
     const onUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
     window.addEventListener("popstate", onPop); window.addEventListener("beforeunload", onUnload);
-    return () => { document.removeEventListener("visibilitychange", onVis); window.removeEventListener("popstate", onPop); window.removeEventListener("beforeunload", onUnload); };
+    return () => { clearTimeout(blurTimer); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("blur", onBlur); window.removeEventListener("focus", onFocus); window.removeEventListener("pagehide", onHide); window.removeEventListener("popstate", onPop); window.removeEventListener("beforeunload", onUnload); };
   }, [attemptId, st?.finished, !!st]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function submit(skip = false) {
@@ -277,7 +315,7 @@ function Runner({ attemptId }: { attemptId: number }) {
     return <div className="overlay fade-in-late" role="alert"><div><span className="big-num" aria-hidden>⏰</span><h1>{t("time_over")}</h1><p className="muted">{t("submitting_saved")}</p><div className="spinner" style={{ margin: "1rem auto" }} /></div></div>;
   }
 
-  const q = st.question!;
+  const q = st.question as NonNullable<typeof st.question>;  // null while locked: the server withholds the question text
   const total = st.total_questions, idx = st.index || 1;
   const low = remainingMs < 5 * 60_000;
   if (proctor.state === "denied" || proctor.state === "lost") {
@@ -296,20 +334,22 @@ function Runner({ attemptId }: { attemptId: number }) {
     // Sitting too close to another student: the question is hidden until an administrator unlocks. The timer keeps running on the server.
     return (
       <div className="overlay lock-overlay" role="alertdialog" aria-labelledby="lock-h" aria-describedby="lock-b"><div>
-        <div className="lock-banner" role="alert"><span aria-hidden>⚠️</span> {t("lock_banner")}</div>
+        <div className="lock-banner" role="alert"><span aria-hidden>⚠️</span> {t(lockReason === "leaves" ? "lock_banner_leaves" : lockReason === "manual" ? "lock_banner_manual" : "lock_banner")}</div>
         <span className="big-num" aria-hidden>🔒</span>
         <h1 id="lock-h">{t("lock_title")}</h1>
-        <p id="lock-b">{t("lock_body")}</p>
+        <p id="lock-b">{t(lockReason === "leaves" ? "lock_body_leaves" : lockReason === "manual" ? "lock_body_manual" : "lock_body")}</p>
         <p className={`timer ${low ? "low" : ""}`} role="timer" aria-label={t("time_left")}>{clock(remainingMs)}</p>
         <p className="muted small" role="status">{t("lock_wait")}</p>
       </div></div>
     );
   }
+  if (!st.question) return <Loading />;  // the question is fetched again by the effect above
   return (
     <div className="no-select" onCopy={(e) => e.preventDefault()} onCut={(e) => e.preventDefault()} onPaste={(e) => e.preventDefault()}
       onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
       {offline && <div className="offline-banner" role="status">📡 {t("offline_banner")}</div>}
       {banner && <div className="warn-banner" role="alert">⏳ {banner}</div>}
+      {leaveMsg && <div className="warn-banner leave-banner" role="alert">⚠️ {leaveMsg} <button className="btn small" onClick={() => setLeaveMsg("")}>OK</button></div>}
       {proctor.bleOff && <div className="offline-banner" role="status">📶 {t("bt_warn")}</div>}
       <div className="exam-head">
         <div className="row">

@@ -1,0 +1,8 @@
+# Security headers for the web app. Netlify and Cloudflare Pages read this file as it is.
+# On Render (Static Site) add the same values under Settings -> Headers. Replace https://api.example.com with your API address.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), payment=(), usb=(), geolocation=(self)
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://api.example.com; connect-src 'self' https://api.example.com https://nominatim.openstreetmap.org; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'

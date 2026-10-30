@@ -94,8 +94,10 @@ export function useProctor(attemptId: number | null, every = 6000) {
   const [accuracy, setAccuracy] = useState<number | null>(null);
   const [bleOff, setBleOff] = useState(false);
   const [locked, setLocked] = useState<boolean | null>(null);  // null = the server has not said yet
+  const [lockReason, setLockReason] = useState<string>("");  // close | leaves | manual
   const lastMsgs = useRef(0);
-  const markLocked = useCallback(() => setLocked(true), []);
+  const markLocked = useCallback((reason = "") => { setLocked(true); if (reason) setLockReason(reason); }, []);
+  const applyLock = useCallback((v: boolean, reason = "") => { setLocked(v); setLockReason(v ? reason : ""); }, []);
   const fails = useRef(0), stop = useRef(false), busy = useRef(false);
 
   const tick = useCallback(async () => {
@@ -106,7 +108,7 @@ export function useProctor(attemptId: number | null, every = 6000) {
       fails.current = 0; setState("ok"); setAccuracy(Math.round(fix.accuracy));
       const sensors = await readSensors();
       setBleOff(sensors.ble === "off");
-      try { const r = await api<{ locked?: boolean; messages?: number }>(`/attempts/${attemptId}/location/`, { body: { ...fix, sensors, device: deviceId() } }); setLocked(!!r?.locked);
+      try { const r = await api<{ locked?: boolean; lock_reason?: string; messages?: number }>(`/attempts/${attemptId}/location/`, { body: { ...fix, sensors, device: deviceId() } }); setLocked(!!r?.locked); setLockReason(r?.locked ? r?.lock_reason || "close" : "");
         const m = r?.messages ?? 0;
         if (m > lastMsgs.current) window.dispatchEvent(new Event("amani:messages"));  // a message from the school arrived: show its banner now
         lastMsgs.current = m; }
@@ -129,5 +131,5 @@ export function useProctor(attemptId: number | null, every = 6000) {
   }, [attemptId, every, tick]);
 
   /** `locked`: an administrator has to unlock this exam because the student sits too close to another one. The next report overrides `markLocked`. */
-  return { state, accuracy, bleOff, locked, markLocked, retry: tick };
+  return { state, accuracy, bleOff, locked, lockReason, markLocked, applyLock, retry: tick };
 }

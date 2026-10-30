@@ -18,7 +18,7 @@ Since {{ ctl.started_at|date:"Y-m-d H:i" }} by {{ ctl.started_by }}{% if ctl.mes
 <p><input type="text" name="phrase" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="type the words above"></p>
 <button class="danger">Turn the site off</button></form></div>
 {% endif %}
-<h2>Recent switches</h2>
+<h2>Recent switches{% if events_url %} <a href="{{ events_url }}" class="muted">all events &rarr;</a>{% endif %}</h2>
 <div class="scroll"><table><tr><th>When</th><th>Who</th><th>Action</th><th>Detail</th></tr>
 {% for e in events %}<tr><td>{{ e.at|date:"Y-m-d H:i" }}</td><td>{{ e.who }}</td><td>{{ e.action }}</td><td>{{ e.detail }}</td></tr>{% empty %}<tr><td colspan="4">Nothing yet.</td></tr>{% endfor %}</table></div>
 {% endblock %}

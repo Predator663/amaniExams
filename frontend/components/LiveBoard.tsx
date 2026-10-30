@@ -9,9 +9,10 @@ import { api } from "@/lib/api";
    transform/opacity/stroke-dashoffset only, and switch off for "reduce motion". */
 
 type Stu = {
-  id: number; name: string; class: string; index: string; parents?: { name: string; phone: string; relationship?: string }[];
+  id: number; name: string; class: string; index: string; parents?: { id: number; name: string; phone: string; relationship?: string }[];
   left_screen?: number; answered?: number; started_at?: string | null; submitted_at?: string | null;
   seconds_left?: number; online?: boolean; auto_submitted?: boolean; completion?: "full" | "partial"; attempt_no?: number;
+  attempt_id?: number; leaves_used?: number; locked?: boolean; lock_reason?: string;
 };
 type ExamRow = {
   exam_id: number; title: string; subject: string; status: string; classes: string[];
@@ -19,6 +20,7 @@ type ExamRow = {
   submitted: number; not_started: number; total_questions: number; full?: number; partial?: number;
   in_progress_students?: Stu[]; submitted_students?: Stu[]; not_started_students?: Stu[];
   connection_problems?: { id: number; name: string }[]; proximity_alerts?: number;
+  leave_lock?: { enabled: boolean; limit: number };
 };
 type Board = { server_time: string; exams: ExamRow[]; totals: { live_exams: number; writing: number; submitted: number } };
 
@@ -64,18 +66,37 @@ function StartsIn({ startIso, offset, onDue }: { startIso: string; offset: numbe
   return <span className="lb-soon">{left > 0 ? `Starts in ${left >= 3600 ? Math.floor(left / 3600) + "h " : ""}${mmss(left % 3600)}` : "Starting…"}</span>;
 }
 
-const Row = memo(function Row({ s, kind, total, at, dur, admin }: { s: Stu; kind: "w" | "s" | "n"; total: number; at: number; dur: number; admin: boolean }) {
+/** Parent numbers arrive masked. "Show number" asks the server for this one number and the reveal is audited. */
+function ParentPhone({ g }: { g: { id: number; name: string; phone: string; relationship?: string } }) {
+  const [full, setFull] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function reveal() {
+    setBusy(true);
+    try { const r = (await api(`/proctoring/guardians/${g.id}/reveal-phone/`, { body: {} })) as { phone: string }; setFull(r.phone); } catch { /* not allowed or offline */ }
+    setBusy(false);
+  }
+  const label = `${g.relationship || "Parent"}: ${g.name} · `;
+  return full
+    ? <a className="lb-tel" href={`tel:${full}`}>{label}{full}</a>
+    : <span className="lb-tel">{label}{g.phone} <button className="btn small" disabled={busy} onClick={reveal}>Show number</button></span>;
+}
+
+const Row = memo(function Row({ s, kind, total, at, dur, admin, leave, onLock }: { s: Stu; kind: "w" | "s" | "n"; total: number; at: number; dur: number; admin: boolean; leave?: { enabled: boolean; limit: number }; onLock?: (s: Stu, lock: boolean) => void }) {
   const pct = total ? (s.answered ?? 0) / total : 0;
+  const used = s.leaves_used ?? 0;
+  const why = s.lock_reason === "leaves" ? "locked: left the screen too often" : s.lock_reason === "manual" ? "locked by an administrator" : "";
   const state = kind === "w" ? (s.online ? "on" : "off") : kind === "s" ? "done" : "idle";
   return (
     <li className={`lb-row s-${state}`}>
       <span className="lb-pulse" aria-hidden="true" />
       <div className="lb-who">
         <strong>{s.name}</strong>
-        <small>{s.class} · #{s.index}{(s.left_screen ?? 0) > 0 && <em className="lb-flag"> · left screen ×{s.left_screen}</em>}</small>
+        <small>{s.class} · #{s.index}{(s.left_screen ?? 0) > 0 && <em className="lb-flag"> · left screen ×{s.left_screen}{kind === "w" && leave?.enabled ? ` (${used}/${leave.limit} allowed)` : ""}</em>}{kind === "w" && s.locked && <em className="lb-locked"> · 🔒 {why}</em>}</small>
+        {kind === "w" && admin && s.attempt_id && onLock && (
+          <button className={`btn small lb-lockbtn ${s.locked ? "primary" : ""}`} onClick={() => onLock(s, !s.locked)}>{s.locked ? "🔓 Unlock" : "🔒 Lock"}</button>
+        )}
         {admin && (s.parents?.length
-          ? s.parents.slice(0, 3).map((g, i) => (
-            <a key={i} className="lb-tel" href={`tel:${g.phone}`}>{g.relationship || "Parent"}: {g.name} · {g.phone}</a>))
+          ? s.parents.slice(0, 3).map((g) => <ParentPhone key={g.id} g={g} />)
           : <small className="lb-nophone">No parent number on file</small>)}
       </div>
       {kind === "n" && <div className="lb-prog"><small>{dur ? "Has not written this exam" : ""}</small></div>}
@@ -97,8 +118,16 @@ const Row = memo(function Row({ s, kind, total, at, dur, admin }: { s: Stu; kind
   );
 });
 
-function ExamCard({ e, open, onToggle, admin, at, q, cls, offset, onDue }: { e: ExamRow; open: boolean; onToggle: () => void; admin: boolean; at: number; q: string; cls: string; offset: number; onDue: () => void }) {
+function ExamCard({ e, open, onToggle, admin, at, q, cls, offset, onDue, onChanged }: { e: ExamRow; open: boolean; onToggle: () => void; admin: boolean; at: number; q: string; cls: string; offset: number; onDue: () => void; onChanged: () => void }) {
   const [tab, setTab] = useState<"w" | "f" | "p" | "n">("w");
+  const [lockErr, setLockErr] = useState("");
+  // Manual lock / unlock of one student. An unlock also gives her a fresh allowance of exits.
+  const setLock = useCallback(async (s: Stu, lock: boolean) => {
+    if (!s.attempt_id) return;
+    if (lock && !window.confirm(`Lock ${s.name}'s exam now? Her timer keeps running until you unlock her.`)) return;
+    try { await api(`/proctoring/attempts/${s.attempt_id}/${lock ? "lock" : "unlock"}/`, { body: {} }); setLockErr(""); onChanged(); }
+    catch (err: any) { setLockErr(err?.message || "Could not change the lock."); }
+  }, [onChanged]);
   const [limit, setLimit] = useState(40);
   useEffect(() => setLimit(40), [tab, q, cls, open]);
   const live = e.status === "live", soon = e.status === "scheduled";
@@ -136,9 +165,11 @@ function ExamCard({ e, open, onToggle, admin, at, q, cls, offset, onDue }: { e: 
                   <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{label} <b>{n}</b></button>
                 ))}
               </div>
+              {live && e.leave_lock && <p className="muted small">{e.leave_lock.enabled ? `Auto-lock is on: a student who leaves the exam screen more than ${e.leave_lock.limit} time${e.leave_lock.limit === 1 ? "" : "s"} is locked until you unlock her.` : "Auto-lock for leaving the screen is off (Settings → School)."} You can also lock or unlock any student by hand.</p>}
+              {lockErr && <p className="lb-alert" role="alert">{lockErr}</p>}
               {list.length === 0 ? <p className="lb-empty">Nobody here{q || cls ? " for this filter" : " yet"}.</p> : (
                 <ul className="lb-list">
-                  {list.slice(0, limit).map((s) => <Row key={s.id} s={s} kind={tab === "w" ? "w" : tab === "n" ? "n" : "s"} total={e.total_questions} at={at} dur={e.duration_minutes} admin={admin} />)}
+                  {list.slice(0, limit).map((s) => <Row key={s.id} s={s} kind={tab === "w" ? "w" : tab === "n" ? "n" : "s"} total={e.total_questions} at={at} dur={e.duration_minutes} admin={admin} leave={e.leave_lock} onLock={setLock} />)}
                 </ul>
               )}
               {list.length > limit && <button className="lb-more" onClick={() => setLimit(limit + 40)}>Show {Math.min(40, list.length - limit)} more</button>}
@@ -242,7 +273,7 @@ export default function LiveBoard({ admin: adminProp }: { admin?: boolean }) {
       <div className="lb-grid" style={admin && tabView === "ac" ? { display: "none" } : undefined}>
         {exams.map((e) => (
           <ExamCard key={e.exam_id} e={e} open={openId === e.exam_id} onToggle={() => setOpenId(openId === e.exam_id ? null : e.exam_id)}
-            admin={admin} at={fetchedAt} q={q} cls={cls} offset={offset} onDue={load} />
+            admin={admin} at={fetchedAt} q={q} cls={cls} offset={offset} onDue={load} onChanged={load} />
         ))}
       </div>
     </div>

@@ -2,7 +2,7 @@
 import { useSession } from "@/lib/session";
 import { speechSupported } from "@/lib/speech";
 
-export const THEME_LIST = ["light", "dark", "high_contrast", "colour_blind", "soft"] as const;
+export const THEME_LIST = ["light", "dark", "high_contrast", "colour_blind", "soft", "mw3"] as const;
 
 /** ACC-01/02/03/06: theme, text size (100-200%), dyslexia font, line spacing, read-aloud, reduce motion. */
 export default function A11yPanel({ compact }: { compact?: boolean }) {

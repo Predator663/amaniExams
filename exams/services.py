@@ -236,12 +236,19 @@ def attempt_state(attempt, now=None):
     if idx >= len(attempt.order):
         return attempt_state(finalize_attempt(attempt.pk, now), now)
     from proctoring import services as proctoring  # local import: proctoring imports exams.models
-    state["locked"] = proctoring.is_locked(exam.pk, attempt.student_id)  # near another student: screen locked until an admin unlocks
-    eq = ExamQuestion.objects.get(pk=attempt.order[idx], exam=exam)
+    reason = proctoring.lock_reason(exam.pk, attempt.student_id)  # close | leaves | manual: screen locked until an admin unlocks
+    state["locked"], state["lock_reason"] = reason is not None, reason or ""
     state.update(
         finished=False, remaining_seconds=max(0, int((attempt.deadline_at - now).total_seconds())),
-        index=idx + 1, can_skip=exam.allow_skip, question=public_question(eq, attempt.seed, exam.shuffle_options),
+        index=idx + 1, can_skip=exam.allow_skip,
     )
+    if reason is not None:
+        # SECURITY: a locked student must not be able to read the question in the network tab / devtools. The text is
+        # sent again by the next GET once an administrator unlocks her.
+        state["question"] = None
+        return state
+    eq = ExamQuestion.objects.get(pk=attempt.order[idx], exam=exam)
+    state["question"] = public_question(eq, attempt.seed, exam.shuffle_options)
     return state
 
 
@@ -257,8 +264,10 @@ def submit_answer(attempt_id, student, question_id, response, skip=False, now=No
     if idx >= len(attempt.order):
         return attempt
     from proctoring import services as proctoring
-    if proctoring.is_locked(attempt.exam_id, student.pk):  # the clock keeps running; the app keeps the answer and re-sends after the unlock
-        raise ExamError("Your exam is locked because you are sitting too close to another student. Move away and wait for the invigilator to unlock it.", 423, "locked")
+    reason = proctoring.lock_reason(attempt.exam_id, student.pk)
+    if reason:  # the clock keeps running; the app keeps the answer and re-sends after the unlock
+        why = {"leaves": "you left the exam screen too many times", "manual": "an administrator locked it"}.get(reason, "you are sitting too close to another student")
+        raise ExamError(f"Your exam is locked because {why}. Wait for the invigilator to unlock it.", 423, "locked")
     if question_id != attempt.order[idx]:
         if question_id in attempt.order[:idx]:
             return attempt  # a repeated send from the offline queue: already saved, ignore (BR-05)

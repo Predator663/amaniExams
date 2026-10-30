@@ -12,6 +12,7 @@ from django.db import transaction
 
 from academics.models import SchoolClass
 from core.models import audit
+from . import temp_password
 from .hashers import InitialPasswordHasher
 from .models import BulkUploadBatch, User
 
@@ -135,19 +136,18 @@ def create_students(batch, actor):
             class_cache[key], _ = SchoolClass.objects.get_or_create(
                 name=r["class"], stream=r["stream"], defaults={"form_level": level}
             )
-        users.append(
-            User(
-                username=make_username(r["first_name"], taken),
-                first_name=r["first_name"],
-                last_name=r["last_name"],
-                index_number=r["index_number"],
-                school_class=class_cache[key],
-                role=User.Role.STUDENT,
-                must_change_password=True,
-                # Starting password = index number, stored hashed, never plain (AUTH-05).
-                password=make_password(r["index_number"], hasher=InitialPasswordHasher.algorithm),
-            )
+        u = User(
+            username=make_username(r["first_name"], taken),
+            first_name=r["first_name"],
+            last_name=r["last_name"],
+            index_number=r["index_number"],
+            school_class=class_cache[key],
+            role=User.Role.STUDENT,
         )
+        # Starting password: a random-looking code (NOT the index number, which classmates know). Stored hashed; the credentials
+        # sheet prints it again from the same secret, so it never sits readable in the database (AUTH-05).
+        temp_password.issue(u, save=False)
+        users.append(u)
         wanted.append(parents.decode_parents(r.get("parents_enc", "")))  # rows saved before this feature have none
     User.objects.bulk_create(users)
     pk_of = dict(User.objects.filter(username__in=[u.username for u in users]).values_list("username", "pk"))

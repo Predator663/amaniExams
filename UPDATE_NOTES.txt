@@ -124,3 +124,92 @@ CONTROL ROOM (new Django app `controlroom`, see docs/control_room.md):
 Changed / new: controlroom/ (new)  config/settings.py (app, 2 middlewares, CONTROLROOM_OWNERS)  config/urls.py
   frontend/components/MaintenanceGate.tsx (new)  frontend/app/layout.tsx  frontend/lib/api.ts  docs/control_room.md
 Rebuild the front end (npm run build).
+
+==== Update: control room - tests fix, every model in the admin, control events ====
+No new migrations. Tests:  python manage.py test controlroom
+- controlroom/tests.py: tests render admin pages, so they now use the plain static storage (the project uses a manifest storage that needs collectstatic). New tests added for the items below.
+- Every model of the project is now in /django-admin/ (owner only; CONTROLROOM_OWNERS decides who). controlroom/admin.py autoregister() runs from
+  ControlRoomConfig.ready() and adds a generic admin for any model that has none, so models added later appear on their own.
+  Password, token, encrypted (_enc), hash and similar columns are never shown or editable; a model that has such columns cannot be created by hand
+  (guardians, SMS devices/jobs, push subscriptions). Foreign keys use the id lookup box (no drop-down with every student).
+  Not registered on purpose: login tokens (authtoken.token) and sessions - the key is the credential and would sit in the page address.
+  Read-only: admin log, content types, permissions, control events.
+- "Every table" and God's Eye now have a "manage" link per table; the table page links to its admin list.
+- Control events: opening one in the admin crashed (the view permission did not accept the row) - fixed. List now has filters (action, date) and search.
+  The visitor's address is the first X-Forwarded-For address (on Render REMOTE_ADDR was always the proxy). The shell command `maintenance on` now records message and back-at.
+  The control room home has an "all events" link.
+- God's Eye "Every table" no longer lists session keys (session_key / session_data are hidden like tokens).
+Changed: controlroom/{admin,apps,eye,views,tests}.py, controlroom/management/commands/maintenance.py, controlroom/templates/controlroom/{home,models,rows,eye}.html
+
+==== Update: Call of Duty Modern Warfare III theme + operator card ====
+No migrations. Tests: python manage.py test accounts core.   Rebuild the front end (npm run build).
+- New sixth theme "Modern Warfare III" (data-theme="mw3"): gunmetal, amber HUD accent, angular corners, condensed caps headings. Pick it in
+  Settings > Accessibility (all users) or as the school's default theme (Staff > Settings). accounts/models.py THEMES accepts "mw3".
+- frontend/lib/site.ts: OPERATOR (Mr. Mhechela, call sign Cratos, e-mail, phone, avatar) written once; SITE.email and SITE.developer now read from it.
+- Operator card (avatar, name, call sign, e-mail, tap-to-call phone) on the About page (#operator) and a small credit line in every footer.
+Changed / new: accounts/models.py accounts/tests.py frontend/lib/site.ts frontend/lib/i18n.ts frontend/components/{OperatorCard(new),Footer,A11yPanel}.tsx
+  frontend/app/{about/page.tsx,staff/settings/page.tsx,globals.css} frontend/public/operator/cratos.jpg (new)
+
+==== Update: lock students who leave the exam screen too often (automatic + manual) ====
+Behaviour: every "left screen" is counted per attempt. Over the limit (default 3: three exits only warn, the FOURTH locks) the exam locks until
+an administrator unlocks it; the exam clock keeps running. Admins can also lock / unlock any writing student by hand in Live monitor.
+Settings -> School -> "Anti-cheat: leaving the exam screen": automatic lock on/off (default ON) + "Times she may leave" (0-50, default 3).
+Two migrations:   python manage.py migrate      (core 0003 settings fields, exams 0003 attempt lock fields)
+Tests:            python manage.py test proctoring.test_leave_lock proctoring exams
+API:   POST /api/attempts/<id>/event/ now replies {locked, lock_reason, locked_now, left, limit, auto_lock}
+       POST /api/proctoring/attempts/<id>/lock/    and   /unlock/    (admins)     GET /api/attempts/<id>/ now has lock_reason
+       monitor rows (in_progress_students) have attempt_id, leaves_used, locked, lock_reason;  each exam has leave_lock {enabled, limit}
+       POST /api/proctoring/exams/<id>/unlock-all/ also releases these locks
+Changed / new files:
+  core/models.py core/views.py core/migrations/0003_leave_lock_settings.py
+  exams/models.py exams/migrations/0003_attempt_screen_lock.py exams/services.py exams/views.py
+  proctoring/services.py proctoring/views.py proctoring/urls.py proctoring/test_leave_lock.py (new)
+  frontend/app/exam/page.tsx frontend/components/LiveBoard.tsx frontend/app/staff/settings/page.tsx
+  frontend/lib/proctor.ts frontend/lib/i18n.ts frontend/lib/types.ts frontend/app/globals.css docs/admin_guide.md
+Rebuild the front end (npm run build); frontend/out is the old build.
+
+==== Security fixes from the audit (#3, #4, #5, #7) ====
+Run:  python manage.py test proctoring.test_leave_lock exams     (no migrations)
+#3 Parents' phone numbers: the live monitor now sends MASKED numbers (+255••••••678) with the parent's id. Admins tap "Show number";
+   POST /api/proctoring/guardians/<id>/reveal-phone/ (admins only) returns the full number and writes audit "guardian.phone_reveal".
+   NOTE: any of your own tests that read parents[...]["phone"] from the monitor must expect the masked value.
+#4 POST /api/attempts/<id>/event/ is throttled to 30 per minute per student (AttemptEventThrottle, no settings change needed).
+#5 While a student is locked (leaves / close / manual) GET /api/attempts/<id>/ returns question = null. The text comes back on the next
+   GET after the unlock (the exam page already refetches on unlock). Frontend shows a loader if a question is missing.
+#7 GET /api/settings/ hides proximity_alert_meters, proximity_lock_enabled, leave_lock_enabled, leave_lock_limit from non-admins.
+Changed: exams/{services,views}.py core/views.py proctoring/{views,urls,test_leave_lock}.py
+  frontend/{app/exam/page.tsx,components/LiveBoard.tsx,lib/types.ts}
+Not in this zip (files I was not given): #1 first-login passwords, #2 NUM_PROXIES, #6, #8-#13 - see SECURITY_SNIPPETS.md.
+Rebuild the front end (npm run build).
+
+==== Security audit: ALL findings (#1-#13) ====
+Run:  python manage.py migrate     (accounts 0003)      Then, once:  python manage.py rotate_initial_passwords --yes
+Test: python manage.py test accounts proctoring exams core     (new: accounts/test_security.py, proctoring/test_leave_lock.py SecurityPatchTests)
+Environment (Render): NUM_PROXIES=1 (default 1 in production), DJANGO_SECRET_KEY (the server now refuses to start with the default key),
+  optional TOKEN_TTL_HOURS=12, TEMP_PASSWORD_TTL_DAYS=14
+#1  Starting password is a random 8-character code (accounts/temp_password.py), NOT the index number. It is derived from DJANGO_SECRET_KEY, so
+    DO NOT CHANGE the secret key while sheets are in use (printed codes would stop matching). The credentials sheet / CSV prints it; the
+    single "reset password" now also returns it once. Unused starting passwords expire after 14 days ("ask the office for a new one").
+    Students already texted a password by the parents' SMS are not on the sheet (their SMS password stays valid).
+    Existing accounts that never logged in still have the OLD index password until you run rotate_initial_passwords --yes (it skips the SMS ones).
+#2  REST_FRAMEWORK NUM_PROXIES (default 1 in production, 0 for runserver/tests). golive_check now FAILS if it is 0.
+#3  Live monitor sends masked parent numbers; "Show number" reveals one number and is audited (guardian.phone_reveal).
+#4  /attempts/<id>/event/ throttled to 30/min per student.
+#5  Locked students get question = null until an admin unlocks them.
+#6  The exam page also reports blur (after 1.5 s without focus) and pagehide; each exit is reported once.
+#7  GET /settings/ hides the four anti-cheat fields from non-admins.
+#8  New core/middleware.py (nosniff, Permissions-Policy, strict CSP on JSON API replies, no-store); the rich-text sanitiser keeps only <img> whose
+    src is /media/... on your own host (an image on another server would reveal the student's address); frontend/public/_headers has the
+    front-end CSP (edit the API address; on Render copy the values into Settings -> Headers).
+    Still true: the login token is kept in localStorage; a CSP is the mitigation.
+#9  Login tokens expire after 12 hours (accounts/authentication.py).
+#10 Question images get random file names (/media/ must stay public: <img> cannot send a login token). Old images keep their names.
+#11 Unknown user names now get the same "too many attempts" lock-out as real ones, so the message cannot reveal which names exist.
+#12 NOT changed: a classmate can still lock an account by failing on purpose (15 minutes). Fixing it means locking per device instead of per
+    account, which would weaken the brute-force protection; an admin can see "login.locked" in the audit log.
+#13 requirements.txt has upper bounds; the gunicorn server refuses to start with the default SECRET_KEY. (A pinned lock file needs
+    internet: run  pip freeze > requirements.lock  on your computer after installing.)
+Changed / new: accounts/{models,views,services,tests,test_security,authentication,temp_password}.py accounts/migrations/0003_temp_password.py
+  accounts/management/commands/rotate_initial_passwords.py config/settings.py core/{middleware,sanitize,reports}.py
+  core/management/commands/golive_check.py guardians/services.py questions/views.py requirements.txt
+  frontend/public/_headers frontend/app/staff/people/page.tsx frontend/app/exam/page.tsx (+ the leave-lock/monitor fixes above)

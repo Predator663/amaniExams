@@ -34,6 +34,13 @@ class Command(BaseCommand):
         check("PASS" if not settings.DEBUG else "FAIL", "DEBUG is off", "Set DJANGO_DEBUG=0 on the server.")
         check("FAIL" if settings.SECRET_KEY == "dev-insecure-change-me" else "PASS", "Secret key is set",
               "Set DJANGO_SECRET_KEY to a long random value.")
+        from rest_framework.settings import api_settings
+        check("PASS" if api_settings.NUM_PROXIES else "FAIL", "Login throttle trusts the real client address (NUM_PROXIES)",
+              "Set NUM_PROXIES=1 on Render. Without it a made-up X-Forwarded-For header dodges the 20-per-minute login limit.")
+        check("PASS" if settings.TOKEN_TTL_HOURS else "WARN", "Login tokens expire (TOKEN_TTL_HOURS)", "Leave TOKEN_TTL_HOURS at 12.")
+        old_pw = User.objects.filter(role=User.Role.STUDENT, must_change_password=True, temp_issued_at__isnull=True, is_archived=False).count()
+        check("PASS" if not old_pw else "WARN", "No student still has her index number as starting password",
+              f"{old_pw} student(s) never logged in on an old starting password. Run: python manage.py rotate_initial_passwords --yes")
         hosts = [h for h in settings.ALLOWED_HOSTS if h not in ("localhost", "127.0.0.1")]
         check("PASS" if hosts else "FAIL", "Allowed hosts include the real web address", "Set DJANGO_ALLOWED_HOSTS.")
         check("PASS" if settings.SECURE_SSL_REDIRECT else "FAIL", "HTTPS redirect is on (NFR-07)", "Leave DJANGO_SSL_REDIRECT=1.")

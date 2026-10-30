@@ -3,6 +3,7 @@ from django.contrib.auth.hashers import make_password
 
 from analytics.tests import AnalyticsBase
 from academics.models import Subject
+from accounts import temp_password
 from accounts.models import User
 
 STRONG = "Strong-Pass-2026"
@@ -70,13 +71,13 @@ class AdminPortalTests(AnalyticsBase):
         r = self.a.post("/api/students/bulk-action/", {"ids": ids, "action": "reset_passwords"}, format="json")
         self.amina.refresh_from_db()
         self.assertTrue(self.amina.must_change_password)
-        self.assertTrue(self.amina.check_password("S1"))  # starting password is the index number
+        self.assertFalse(self.amina.check_password("S1"))  # NOT the index number any more
+        self.assertTrue(self.amina.check_password(temp_password.password_for(self.amina)))  # a random code from the credentials sheet
         self.assertEqual(self.a.post("/api/students/bulk-action/", {"ids": ids, "action": "nope"}, format="json").status_code, 400)
         self.assertEqual(self.client_for(self.teacher).post("/api/students/bulk-action/", {"ids": ids, "action": "deactivate"}, format="json").status_code, 403)
 
     def test_credential_sheet_pdf_lists_only_students_still_on_starting_password(self):
-        self.amina.must_change_password = True
-        self.amina.save()
+        temp_password.issue(self.amina)
         r = self.a.get(f"/api/students/credentials/?class={self.cls_a.pk}")
         self.assertTrue(r.content.startswith(b"%PDF"))
         csv = self.a.get("/api/students/credentials/?file=csv")
@@ -99,6 +100,11 @@ class AdminPortalTests(AnalyticsBase):
         self.assertTrue(d["accessibility"]["dyslexia_font"] and d["accessibility"]["reduce_motion"])
         self.assertEqual(d["theme"], "high_contrast")
         self.assertEqual(c.patch("/api/me/", {"text_size": "huge"}, format="json").status_code, 400)
+
+    def test_modern_warfare_theme_can_be_chosen(self):
+        c = self.client_for(self.amina)
+        self.assertEqual(c.patch("/api/me/", {"theme": "mw3"}, format="json").json()["theme"], "mw3")
+        self.assertEqual(c.patch("/api/me/", {"theme": "neon"}, format="json").status_code, 400)
 
     def test_password_change_creates_notification(self):
         from notifications.models import Notification

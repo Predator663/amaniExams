@@ -3,6 +3,7 @@ import Link from "next/link";
 import Logo from "@/components/Logo";
 import PublicPage from "@/components/PublicPage";
 import { useSession } from "@/lib/session";
+import OperatorCard from "@/components/OperatorCard";
 import { SITE } from "@/lib/site";
 
 export default function About() {
@@ -35,6 +36,9 @@ export default function About() {
         <p>E-mail: <a href={`mailto:${SITE.email}`}>{SITE.email}</a><br />Phone: <a href={`tel:${SITE.phone.replace(/\s/g, "")}`}>{SITE.phone}</a></p>
         <p className="muted small">Forgotten password? Ask your teacher or the school administrator to reset it. Staff cannot see your password.</p>
       </div>
+
+      <h2>Operator</h2>
+      <OperatorCard />
 
       <h2>Version and credits</h2>
       <p>Version {SITE.version}, {SITE.year}. Developed for {SITE.school}{SITE.developer !== SITE.school ? ` by ${SITE.developer}` : ""}. Built with Django, Next.js and React.</p>

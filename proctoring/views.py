@@ -28,8 +28,9 @@ def config(request):
 def report_location(request, attempt_id):
     """The phone reports where it is. Positions of students who are not in an exam attempt are never accepted."""
     attempt = get_object_or_404(Attempt.objects.select_related("exam", "student"), pk=attempt_id, student=request.user)
-    if not services.enabled():
-        return Response({"ok": True, "enabled": False})
+    if not services.enabled():  # no position checks, but a lock for leaving the screen (or set by hand) must still reach the phone
+        reason = services.lock_reason(attempt.exam_id, request.user.pk)
+        return Response({"ok": True, "enabled": False, "locked": reason is not None, "lock_reason": reason or ""})
     if attempt.status != Attempt.IN_PROGRESS:
         return Response({"detail": "This exam attempt is finished.", "code": "finished"}, status=409)
     fix = services.parse_fix(request.data)
@@ -45,10 +46,10 @@ def report_location(request, attempt_id):
     sensors = request.data.get("sensors")
     motion_moving = isinstance(sensors, dict) and sensors.get("motion") == "moving"
     services.ingest(attempt, fix, speed=num("speed"), heading=num("heading"), sensors=sensors, motion_moving=motion_moving, **services.client_info(request))
-    lock = services.locking_alert(attempt.exam_id, request.user.pk)
+    reason = services.lock_reason(attempt.exam_id, request.user.pk)
     from notifications.models import AdminMessage
     unseen = AdminMessage.objects.filter(recipient=request.user, dismissed_at__isnull=True).count()  # the exam screen then shows the banner at once
-    return Response({"ok": True, "locked": bool(lock), "messages": unseen})
+    return Response({"ok": True, "locked": reason is not None, "lock_reason": reason or "", "messages": unseen})
 
 
 def _row(ll, now):
@@ -187,6 +188,24 @@ def unlock_alert(request, alert_id):
 
 @api_view(["POST"])
 @permission_classes([IsAdminRole])
+def lock_student(request, attempt_id):
+    """Lock one running student's exam by hand (live monitor). The exam clock keeps running."""
+    at = get_object_or_404(Attempt, pk=attempt_id)
+    if at.status != Attempt.IN_PROGRESS:
+        return Response({"detail": "This student is not writing any more.", "code": "finished"}, status=409)
+    return Response({"ok": True, "locked": services.lock_attempt(at.pk, request.user)})
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminRole])
+def unlock_student(request, attempt_id):
+    """Let a student locked for leaving the screen (or locked by hand) carry on."""
+    at = get_object_or_404(Attempt, pk=attempt_id)
+    return Response({"ok": True, "unlocked": services.unlock_attempt(at.pk, request.user)})
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminRole])
 def unlock_exam(request, exam_id):
     exam = get_object_or_404(Exam, pk=exam_id)
     return Response({"ok": True, "unlocked": services.unlock_all(exam.pk, request.user)})
@@ -204,3 +223,15 @@ def place(request):
         return Response({"detail": "Position not valid.", "code": "bad_fix"}, status=400)
     p = geocode.reverse(lat, lng)
     return Response({"enabled": geocode.enabled(), **(p or {"label": None})})
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminRole])
+def reveal_parent_phone(request, guardian_id):
+    """Admin taps "Show number" in the live monitor. The full number is returned for this one parent only, and every
+    reveal is written to the audit log (the monitor itself only ever carries masked numbers)."""
+    from guardians.models import GuardianLink
+    Guardian = GuardianLink._meta.get_field("guardian").related_model  # the parent record the Parents page uses
+    g = get_object_or_404(Guardian, pk=guardian_id)
+    audit(request.user, "guardian.phone_reveal", f"guardian {g.pk}", via="live_monitor", exam=request.data.get("exam_id"))
+    return Response({"id": g.pk, "phone": g.phone})

@@ -11,8 +11,9 @@ export type Question = {
 export type AttemptState = {
   attempt_id: number; exam_id: number; title: string; server_time: string; deadline_at: string; total_questions: number;
   warnings: number[]; status: string; finished: boolean; remaining_seconds?: number; index?: number; can_skip?: boolean;
-  question?: Question; time_over?: boolean; results_at?: string; message?: string; results_note?: string;
+  question?: Question | null; time_over?: boolean; results_at?: string; message?: string; results_note?: string;
   tips?: { kind: string; text: string }[];
+  lock_reason?: "close" | "leaves" | "manual" | "";  // why it is locked
   locked?: boolean;  // sitting too close to another student: screen locked until an admin unlocks (clock keeps running)
 };
 export type ExamCard = {

@@ -1,5 +1,5 @@
 {% extends "controlroom/base.html" %}
-{% block cr %}<h1>{{ title }} <span class="muted">{{ label }} &middot; {{ total }} rows</span></h1>
+{% block cr %}<h1>{{ title }} <span class="muted">{{ label }} &middot; {{ total }} rows</span>{% if admin_url %} <a href="{{ admin_url }}" class="muted">manage in admin &rarr;</a>{% endif %}</h1>
 <form method="get"><input type="text" name="q" value="{{ q }}" placeholder="Search text columns" style="max-width:320px"> <button class="safe" style="padding:6px 12px">Search</button></form>
 <div class="scroll"><table><tr>{% for c in cols %}<th>{{ c }}</th>{% endfor %}</tr>
 {% for r in rows %}<tr>{% for v in r %}<td>{{ v }}</td>{% endfor %}</tr>{% empty %}<tr><td>No rows.</td></tr>{% endfor %}</table></div>

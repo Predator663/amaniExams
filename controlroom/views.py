@@ -1,4 +1,5 @@
 import hmac
+import ipaddress
 import json
 from functools import wraps
 
@@ -32,7 +33,15 @@ def owner_only(view):
 
 
 def _ip(request):
-    return request.META.get("REMOTE_ADDR") or None
+    """The visitor's address. On Render every request comes through a proxy, so REMOTE_ADDR is the proxy; the first address of
+    X-Forwarded-For is the visitor. Only the owner can reach these views, so a forged header can only mislead the owner himself."""
+    fwd = (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
+    for cand in (fwd, (request.META.get("REMOTE_ADDR") or "").strip()):
+        try:
+            return str(ipaddress.ip_address(cand))
+        except ValueError:
+            continue
+    return None
 
 
 def _log(request, action, detail=""):
@@ -58,6 +67,7 @@ def home(request):
     return render(request, "controlroom/home.html", {
         "ctl": ctl, "phrase": _phrase(request), "events": ControlEvent.objects.all()[:15],
         "title": "Control room", "owners": sorted(state.owners()) or ["any superuser"],
+        "events_url": eye.admin_url(ControlEvent),
     })
 
 
@@ -127,7 +137,7 @@ def model_rows(request, label):
         page = 1
     q = request.GET.get("q", "")
     data = eye.browse(m, q, page)
-    return render(request, "controlroom/rows.html", {"title": str(m._meta.verbose_name_plural).title(), "label": label, "q": q, **data})
+    return render(request, "controlroom/rows.html", {"title": str(m._meta.verbose_name_plural).title(), "label": label, "q": q, "admin_url": eye.admin_url(m), **data})
 
 
 @never_cache

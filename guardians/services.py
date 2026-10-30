@@ -469,7 +469,8 @@ def queue_send(items, user, note="", templates=None):
                 passwords[s.pk] = new_password()
                 s.set_password(passwords[s.pk])
                 s.must_change_password = True
-                s.save(update_fields=["password", "must_change_password"])
+                s.temp_issued_at = None  # this password lives only in the SMS, not on the printed credentials sheet
+                s.save(update_fields=["password", "must_change_password", "temp_issued_at"])
                 Token.objects.filter(user=s).delete()  # any old login stops working
             pairs.append((_display(s), s.username, passwords[s.pk]))
         SmsJob.objects.create(
@@ -498,7 +499,8 @@ def requeue(job, user=None):
             pw = new_password()
             s.set_password(pw)
             s.must_change_password = True
-            s.save(update_fields=["password", "must_change_password"])
+            s.temp_issued_at = None
+            s.save(update_fields=["password", "must_change_password", "temp_issued_at"])
             Token.objects.filter(user=s).delete()
             pairs.append((_display(s), s.username, pw))
         job.body_enc = crypto.encrypt(build_body(job.guardian.language, cfg, pairs, job.note, job.template))
