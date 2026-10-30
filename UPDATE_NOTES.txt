@@ -213,3 +213,7 @@ Changed / new: accounts/{models,views,services,tests,test_security,authenticatio
   accounts/management/commands/rotate_initial_passwords.py config/settings.py core/{middleware,sanitize,reports}.py
   core/management/commands/golive_check.py guardians/services.py questions/views.py requirements.txt
   frontend/public/_headers frontend/app/staff/people/page.tsx frontend/app/exam/page.tsx (+ the leave-lock/monitor fixes above)
+
+==== Fix: PATCH /api/me/ refuses an unknown theme or language (400) ====
+accounts/tests.py test_modern_warfare_theme_can_be_chosen expected 400 for theme "neon" but the view ignored it (200). accounts/views.py now raises 400.
+Test: python manage.py test accounts      Changed: accounts/views.py

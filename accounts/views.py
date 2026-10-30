@@ -151,7 +151,9 @@ class MeView(APIView):
         """Language, theme and accessibility choices are remembered per user (ACC-01, ACC-02, ACC-06)."""
         u, d = request.user, request.data
         for f, allowed in (("language", {"en", "sw"}), ("theme", THEMES)):
-            if f in d and d[f] in allowed:
+            if f in d:
+                if d[f] not in allowed:  # an unknown choice is refused, not silently ignored
+                    raise ValidationError({f: "Choose one of: " + ", ".join(sorted(allowed)) + "."})
                 setattr(u, f, d[f])
         if "text_size" in d:
             try:
